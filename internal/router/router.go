@@ -18,14 +18,17 @@ type Session struct {
 	inTransaction       bool
 	lastWriteTime       time.Time
 	readAfterWriteDelay time.Duration
+	causalConsistency   bool
+	lastWriteLSN        LSN
 
 	// Prepared statement routing: statement name → route
 	stmtRoutes map[string]Route
 }
 
-func NewSession(readAfterWriteDelay time.Duration) *Session {
+func NewSession(readAfterWriteDelay time.Duration, causalConsistency bool) *Session {
 	return &Session{
 		readAfterWriteDelay: readAfterWriteDelay,
+		causalConsistency:   causalConsistency,
 		stmtRoutes:          make(map[string]Route),
 	}
 }
@@ -54,11 +57,21 @@ func (s *Session) Route(query string) Route {
 
 	// Write query
 	if qtype == QueryWrite {
-		s.lastWriteTime = time.Now()
+		if !s.causalConsistency {
+			s.lastWriteTime = time.Now()
+		}
+		// LSN is set externally via SetLastWriteLSN after the write completes
 		return RouteWriter
 	}
 
-	// Read-after-write: send to writer within delay window
+	// Read-after-write protection
+	if s.causalConsistency {
+		// LSN-based: handled by the caller via LastWriteLSN() + LSN-aware balancer
+		// Route returns RouteReader; the server uses session LSN for balancer selection
+		return RouteReader
+	}
+
+	// Timer-based: send to writer within delay window
 	if s.readAfterWriteDelay > 0 && !s.lastWriteTime.IsZero() &&
 		time.Since(s.lastWriteTime) < s.readAfterWriteDelay {
 		return RouteWriter
@@ -168,6 +181,20 @@ func (s *Session) StatementRoute(name string) Route {
 	return RouteWriter
 }
 
+// SetLastWriteLSN records the WAL LSN after a write query.
+func (s *Session) SetLastWriteLSN(lsn LSN) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastWriteLSN = lsn
+}
+
+// LastWriteLSN returns the last recorded write LSN for LSN-aware routing.
+func (s *Session) LastWriteLSN() LSN {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastWriteLSN
+}
+
 // CloseStatement removes a prepared statement from the routing map.
 func (s *Session) CloseStatement(name string) {
 	s.mu.Lock()
@@ -190,6 +217,10 @@ func (s *Session) routeLocked(query string) Route {
 
 	if Classify(query) == QueryWrite {
 		return RouteWriter
+	}
+
+	if s.causalConsistency {
+		return RouteReader
 	}
 
 	if s.readAfterWriteDelay > 0 && !s.lastWriteTime.IsZero() &&

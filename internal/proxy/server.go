@@ -321,7 +321,7 @@ func (s *Server) handleConn(ctx context.Context, rawConn net.Conn) {
 	slog.Info("handshake complete", "remote", rawConn.RemoteAddr())
 
 	// 4. Create per-client session router
-	session := router.NewSession(s.cfg.Routing.ReadAfterWriteDelay)
+	session := router.NewSession(s.cfg.Routing.ReadAfterWriteDelay, s.cfg.Routing.CausalConsistency)
 
 	// 5. Relay queries with transaction-level pooling
 	s.relayQueries(ctx, clientConn, session)
@@ -513,7 +513,7 @@ func (s *Server) relayQueries(ctx context.Context, clientConn net.Conn, session 
 					return
 				}
 
-				s.handleWriteQuery(clientConn, wConn, msg, query)
+				s.handleWriteQuery(clientConn, wConn, msg, query, session)
 
 				// Transaction lifecycle management
 				switch {
@@ -745,7 +745,7 @@ func (s *Server) fallbackToWriter(ctx context.Context, clientConn net.Conn, msg 
 }
 
 // handleWriteQuery forwards a write query to the writer and invalidates cache.
-func (s *Server) handleWriteQuery(clientConn net.Conn, writerConn net.Conn, msg *protocol.Message, query string) {
+func (s *Server) handleWriteQuery(clientConn net.Conn, writerConn net.Conn, msg *protocol.Message, query string, session *router.Session) {
 	if err := s.forwardAndRelay(clientConn, writerConn, msg); err != nil {
 		slog.Error("forward write to writer", "error", err)
 		if s.writerCB != nil {
@@ -755,6 +755,16 @@ func (s *Server) handleWriteQuery(clientConn net.Conn, writerConn net.Conn, msg 
 	}
 	if s.writerCB != nil {
 		s.writerCB.RecordSuccess()
+	}
+
+	// Track WAL LSN for causal consistency
+	if s.cfg.Routing.CausalConsistency && router.Classify(query) == router.QueryWrite {
+		if lsn, err := s.queryCurrentLSN(writerConn); err != nil {
+			slog.Warn("query WAL LSN after write", "error", err)
+		} else {
+			session.SetLastWriteLSN(lsn)
+			slog.Debug("write LSN tracked", "lsn", lsn)
+		}
 	}
 
 	// Invalidate cache for affected tables
@@ -773,6 +783,40 @@ func (s *Server) handleWriteQuery(clientConn net.Conn, writerConn net.Conn, msg 
 			s.invalidator.Publish(context.Background(), tables)
 		}
 	}
+}
+
+// queryCurrentLSN queries the current WAL LSN from the writer connection.
+func (s *Server) queryCurrentLSN(writerConn net.Conn) (router.LSN, error) {
+	payload := append([]byte("SELECT pg_current_wal_lsn()"), 0)
+	if err := protocol.WriteMessage(writerConn, protocol.MsgQuery, payload); err != nil {
+		return 0, fmt.Errorf("send LSN query: %w", err)
+	}
+
+	var lsnStr string
+	for {
+		msg, err := protocol.ReadMessage(writerConn)
+		if err != nil {
+			return 0, fmt.Errorf("read LSN response: %w", err)
+		}
+		if msg.Type == protocol.MsgDataRow && len(msg.Payload) >= 6 {
+			// DataRow: Int16(numCols) + Int32(len) + Byte[n](value)
+			colLen := int(binary.BigEndian.Uint32(msg.Payload[2:6]))
+			if colLen > 0 && 6+colLen <= len(msg.Payload) {
+				lsnStr = string(msg.Payload[6 : 6+colLen])
+			}
+		}
+		if msg.Type == protocol.MsgErrorResponse {
+			return 0, fmt.Errorf("LSN query returned error")
+		}
+		if msg.Type == protocol.MsgReadyForQuery {
+			break
+		}
+	}
+
+	if lsnStr == "" {
+		return 0, fmt.Errorf("no LSN value returned")
+	}
+	return router.ParseLSN(lsnStr)
 }
 
 // handleReadQuery checks cache, acquires a reader from pool, or falls back to writer.

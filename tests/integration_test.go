@@ -18,7 +18,7 @@ func TestIntegration_RouterWithCache(t *testing.T) {
 		TTL:        time.Second,
 		MaxSize:    4096,
 	})
-	session := router.NewSession(200 * time.Millisecond)
+	session := router.NewSession(200 * time.Millisecond, false)
 
 	// 1. SELECT → Reader route + cache miss
 	query := "SELECT * FROM users WHERE id = 1"
@@ -74,7 +74,7 @@ func TestIntegration_RouterWithCache(t *testing.T) {
 
 // TestIntegration_TransactionRouting tests full transaction flow.
 func TestIntegration_TransactionRouting(t *testing.T) {
-	session := router.NewSession(0)
+	session := router.NewSession(0, false)
 
 	steps := []struct {
 		query string

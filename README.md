@@ -94,7 +94,8 @@ pool:
   reset_query: "DISCARD ALL"    # 커넥션 반환 시 세션 리셋 쿼리
 
 routing:
-  read_after_write_delay: 500ms
+  read_after_write_delay: 500ms  # 타이머 기반 (causal_consistency와 양자택일)
+  causal_consistency: false       # true: LSN 기반 Causal Consistency (read_after_write_delay 무시)
 
 cache:
   enabled: true

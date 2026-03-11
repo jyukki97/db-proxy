@@ -6,7 +6,7 @@ import (
 )
 
 func TestSession_BasicRouting(t *testing.T) {
-	s := NewSession(0)
+	s := NewSession(0, false)
 
 	if got := s.Route("SELECT * FROM users"); got != RouteReader {
 		t.Errorf("SELECT → %d, want RouteReader", got)
@@ -17,7 +17,7 @@ func TestSession_BasicRouting(t *testing.T) {
 }
 
 func TestSession_Transaction(t *testing.T) {
-	s := NewSession(0)
+	s := NewSession(0, false)
 
 	// BEGIN → all queries go to writer
 	if got := s.Route("BEGIN"); got != RouteWriter {
@@ -40,7 +40,7 @@ func TestSession_Transaction(t *testing.T) {
 }
 
 func TestSession_ReadAfterWriteDelay(t *testing.T) {
-	s := NewSession(100 * time.Millisecond)
+	s := NewSession(100 * time.Millisecond, false)
 
 	// Write
 	s.Route("INSERT INTO users VALUES (1)")
@@ -60,7 +60,7 @@ func TestSession_ReadAfterWriteDelay(t *testing.T) {
 }
 
 func TestSession_Rollback(t *testing.T) {
-	s := NewSession(0)
+	s := NewSession(0, false)
 
 	s.Route("BEGIN")
 	if !s.InTransaction() {
@@ -78,7 +78,7 @@ func TestSession_Rollback(t *testing.T) {
 }
 
 func TestSession_PreparedStatements(t *testing.T) {
-	s := NewSession(0)
+	s := NewSession(0, false)
 
 	// Register a SELECT prepared statement → reader
 	route := s.RegisterStatement("stmt_read", "SELECT * FROM users WHERE id = $1")
@@ -113,7 +113,7 @@ func TestSession_PreparedStatements(t *testing.T) {
 }
 
 func TestSession_PreparedStatement_InTransaction(t *testing.T) {
-	s := NewSession(0)
+	s := NewSession(0, false)
 
 	// Start transaction
 	s.Route("BEGIN")
@@ -134,7 +134,7 @@ func TestSession_PreparedStatement_InTransaction(t *testing.T) {
 }
 
 func TestSession_UnnamedStatement(t *testing.T) {
-	s := NewSession(0)
+	s := NewSession(0, false)
 
 	// Unnamed statement (empty string) — overwritten on each Parse
 	s.RegisterStatement("", "SELECT 1")
@@ -150,7 +150,7 @@ func TestSession_UnnamedStatement(t *testing.T) {
 }
 
 func TestSession_MultiStatementCommit(t *testing.T) {
-	s := NewSession(0)
+	s := NewSession(0, false)
 
 	// Start transaction
 	s.Route("BEGIN")
@@ -171,7 +171,7 @@ func TestSession_MultiStatementCommit(t *testing.T) {
 }
 
 func TestSession_MultiStatementBegin(t *testing.T) {
-	s := NewSession(0)
+	s := NewSession(0, false)
 
 	// Multi-statement with BEGIN embedded
 	s.Route("SELECT 1; BEGIN;")
@@ -182,6 +182,48 @@ func TestSession_MultiStatementBegin(t *testing.T) {
 	// All subsequent queries should go to writer
 	if got := s.Route("SELECT * FROM users"); got != RouteWriter {
 		t.Errorf("SELECT in tx → %d, want RouteWriter", got)
+	}
+}
+
+func TestSession_CausalConsistency_LSNTracking(t *testing.T) {
+	s := NewSession(0, true)
+
+	// Initially no LSN
+	if lsn := s.LastWriteLSN(); !lsn.IsZero() {
+		t.Errorf("initial LSN should be zero, got %v", lsn)
+	}
+
+	// Write query — timer should NOT be set (causal mode)
+	s.Route("INSERT INTO users VALUES (1)")
+
+	// Read after write in causal mode → RouteReader (caller handles LSN-aware routing)
+	if got := s.Route("SELECT * FROM users"); got != RouteReader {
+		t.Errorf("SELECT in causal mode → %d, want RouteReader", got)
+	}
+
+	// Set LSN externally (simulating server behavior)
+	lsn, _ := ParseLSN("0/16B3748")
+	s.SetLastWriteLSN(lsn)
+
+	if got := s.LastWriteLSN(); got != lsn {
+		t.Errorf("LastWriteLSN = %v, want %v", got, lsn)
+	}
+
+	// Read still returns RouteReader (LSN-aware balancer handles fallback)
+	if got := s.Route("SELECT * FROM users"); got != RouteReader {
+		t.Errorf("SELECT with LSN set → %d, want RouteReader", got)
+	}
+}
+
+func TestSession_CausalConsistency_SkipsTimerDelay(t *testing.T) {
+	// With causal consistency ON, read_after_write_delay should be ignored
+	s := NewSession(100*time.Millisecond, true)
+
+	s.Route("INSERT INTO users VALUES (1)")
+
+	// In causal mode, reads should NOT be routed to writer by timer
+	if got := s.Route("SELECT * FROM users"); got != RouteReader {
+		t.Errorf("SELECT in causal mode → %d, want RouteReader (timer should be skipped)", got)
 	}
 }
 
