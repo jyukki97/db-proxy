@@ -16,6 +16,18 @@ type Config struct {
 	Routing RoutingConfig `yaml:"routing"`
 	Cache   CacheConfig   `yaml:"cache"`
 	Backend BackendConfig `yaml:"backend"`
+	Metrics MetricsConfig `yaml:"metrics"`
+	Admin   AdminConfig   `yaml:"admin"`
+}
+
+type MetricsConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Listen  string `yaml:"listen"`
+}
+
+type AdminConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Listen  string `yaml:"listen"`
 }
 
 type BackendConfig struct {
@@ -108,6 +120,12 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Backend.Database == "" {
 		c.Backend.Database = "postgres"
+	}
+	if c.Metrics.Listen == "" {
+		c.Metrics.Listen = "0.0.0.0:9090"
+	}
+	if c.Admin.Listen == "" {
+		c.Admin.Listen = "0.0.0.0:9091"
 	}
 }
 

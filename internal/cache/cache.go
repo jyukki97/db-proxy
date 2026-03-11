@@ -135,6 +135,15 @@ func (c *Cache) InvalidateTable(table string) {
 	delete(c.tableIndex, table)
 }
 
+// FlushAll removes all entries from the cache.
+func (c *Cache) FlushAll() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.items = make(map[uint64]*list.Element)
+	c.evictList.Init()
+	c.tableIndex = make(map[string]map[uint64]struct{})
+}
+
 // Len returns the number of items in the cache.
 func (c *Cache) Len() int {
 	c.mu.RLock()

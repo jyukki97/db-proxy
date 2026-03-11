@@ -31,3 +31,11 @@ backend:
   user: "postgres"
   password: "postgres"
   database: "testdb"
+
+metrics:
+  enabled: true
+  listen: "0.0.0.0:19090"
+
+admin:
+  enabled: true
+  listen: "0.0.0.0:19091"
