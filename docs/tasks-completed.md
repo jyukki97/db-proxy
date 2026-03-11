@@ -437,3 +437,23 @@
 |------|------|---------|
 | - | Audit Webhook 동기 호출 → 비동기 고루틴 분리 (Channel Blocking 방지) | #86 / #88 |
 | - | drainUntilReady 에러 반환 추가 → 죽은 커넥션 Discard 처리 (Connection Poisoning 방지) | #87 / #89 |
+
+### Phase 17: OpenTelemetry 분산 추적
+
+| Task | 작업 | 이슈/PR |
+|------|------|---------|
+| T17-1 | OTel 의존성 및 TelemetryConfig 설정 구조체 추가 | #95 / #98 |
+| T17-2 | TracerProvider + Exporter 초기화 (internal/telemetry/telemetry.go) | #95 / #98 |
+| T17-3 | Simple Query 경로 Span 계측 (pgmux.query → parse → cache → pool → exec) | #95 / #98 |
+| T17-4 | Extended Query 경로 Span 계측 (pgmux.extended_query) | #95 / #98 |
+| T17-5 | Data API traceparent HTTP 전파 | #95 / #98 |
+| T17-7 | README/CLAUDE.md telemetry 문서화 | #95 / #98 |
+
+### Phase 18: Config File Watch (fsnotify)
+
+| Task | 작업 | 이슈/PR |
+|------|------|---------|
+| T18-1 | fsnotify 의존성 및 ConfigOptionsConfig.Watch 설정 추가 | #94 / #96 |
+| T18-2 | FileWatcher 구현 (부모 디렉토리 감시, 디바운싱, symlink swap 지원) | #94 / #96 |
+| T18-3 | main.go 통합 (기존 reloadConfig() 재사용) | #94 / #96 |
+| T18-4 | 단위 테스트 4건 (수정 감지, 디바운싱, symlink swap, Stop 안전성) | #94 / #96 |

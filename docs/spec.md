@@ -282,7 +282,55 @@ Kubernetes에 pgmux를 배포하기 위한 Helm Chart를 제공한다.
 
 ---
 
-### 12. 향후 고도화 아이디어 (Future Enhancements)
-- **분산 추적 (OpenTelemetry)**: 쿼리가 프록시를 거쳐 처리되는 전 과정을 모니터링하기 위한 Trace ID 삽입.
+### 12. OpenTelemetry 분산 추적
+
+프록시 내부 처리 단계별 지연 시간을 Span으로 기록하여 분산 추적을 지원한다.
+
+- **TracerProvider**
+  - OTLP gRPC 또는 stdout exporter 지원
+  - Resource: `service.name`, `service.version`
+  - Sampler: ratio-based (0.0 ~ 1.0)
+  - W3C TraceContext + Baggage propagator
+- **Simple Query Span 구조**
+  - `pgmux.query` (root) → `pgmux.parse` → `pgmux.cache.lookup` → `pgmux.pool.acquire` → `pgmux.backend.exec` → `pgmux.cache.store`
+  - Attributes: `db.system`, `db.statement`, `db.operation`, `pgmux.route`, `pgmux.cached`
+- **Extended Query Span 구조**
+  - `pgmux.extended_query` (root) → `pgmux.pool.acquire` → `pgmux.backend.exec`
+- **Data API Trace 전파**
+  - HTTP `traceparent` 헤더를 파싱하여 부모 span context로 사용
+- **설정**
+  - `telemetry.enabled: false`일 때 noop tracer (성능 영향 없음)
+
+```yaml
+telemetry:
+  enabled: false
+  exporter: "otlp"          # otlp | stdout
+  endpoint: "localhost:4317"
+  service_name: "pgmux"
+  sample_ratio: 1.0
+```
+
+---
+
+### 13. 설정 파일 자동 리로드
+
+`fsnotify`로 설정 파일 변경을 감지하여 무중단 리로드를 자동으로 트리거한다.
+
+- **FileWatcher**
+  - 부모 디렉토리 감시로 K8s ConfigMap symlink swap 지원
+  - 1초 디바운싱으로 연속 이벤트 병합
+  - 기존 SIGHUP 리로드 경로 재사용 (Phase 11)
+- **설정**
+  - `config.watch: true`일 때 활성화 (기본값: `false`)
+
+```yaml
+config:
+  watch: true
+```
+
+---
+
+### 14. 향후 고도화 아이디어 (Future Enhancements)
+- **Prepared Statement Multiplexing**: Parse/Bind를 인터셉트하여 Simple Query로 합성. Transaction Pooling에서 Prepared Statement 지원.
 - **Multi-Tenant Routing**: 테넌트별 백엔드 라우팅 (단일 백엔드 아키텍처 변경 필요).
 - **K8s Operator (CRD)**: Helm 이상의 자동화가 필요할 때 별도 프로젝트로 구현.

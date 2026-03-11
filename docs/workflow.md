@@ -30,6 +30,8 @@
 | W23 | Audit Logging & Slow Query | 쿼리 감사 로그, Slow Query 감지, Webhook 알림 | 완료 |
 | W24 | Helm Chart | K8s 배포용 Helm Chart, Dockerfile 최적화 | 완료 |
 | W25 | Serverless Data API | HTTP REST → PG Protocol 변환, JSON 응답 | 완료 |
+| W26-27 | OpenTelemetry 분산 추적 | TracerProvider, Span 계측, Data API traceparent 전파 | 완료 |
+| W28 | Config File Watch | fsnotify 설정 파일 변경 감지, 자동 리로드 | 완료 |
 
 ---
 
