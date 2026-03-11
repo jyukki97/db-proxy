@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/jyukki97/db-proxy/internal/config"
 	"github.com/jyukki97/db-proxy/internal/proxy"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -41,6 +43,18 @@ func run() error {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+
+	// Start Prometheus metrics HTTP server
+	if cfg.Metrics.Enabled {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", promhttp.Handler())
+		go func() {
+			slog.Info("metrics server starting", "listen", cfg.Metrics.Listen)
+			if err := http.ListenAndServe(cfg.Metrics.Listen, mux); err != nil && err != http.ErrServerClosed {
+				slog.Error("metrics server error", "error", err)
+			}
+		}()
+	}
 
 	srv := proxy.NewServer(cfg)
 	slog.Info("db-proxy starting", "listen", cfg.Proxy.Listen)

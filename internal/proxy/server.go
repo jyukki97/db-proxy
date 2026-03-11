@@ -9,9 +9,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/jyukki97/db-proxy/internal/cache"
 	"github.com/jyukki97/db-proxy/internal/config"
+	"github.com/jyukki97/db-proxy/internal/metrics"
 	"github.com/jyukki97/db-proxy/internal/pool"
 	"github.com/jyukki97/db-proxy/internal/protocol"
 	"github.com/jyukki97/db-proxy/internal/router"
@@ -24,6 +26,7 @@ type Server struct {
 	readerPools map[string]*pool.Pool
 	balancer    *router.RoundRobin
 	queryCache  *cache.Cache
+	metrics     *metrics.Metrics
 	listener    net.Listener
 	wg          sync.WaitGroup
 }
@@ -42,6 +45,12 @@ func NewServer(cfg *config.Config) *Server {
 		writerAddr:  writerAddr,
 		balancer:    router.NewRoundRobin(readerAddrs),
 		readerPools: make(map[string]*pool.Pool),
+	}
+
+	// Initialize Prometheus metrics
+	if cfg.Metrics.Enabled {
+		s.metrics = metrics.New()
+		slog.Info("prometheus metrics enabled", "listen", cfg.Metrics.Listen)
 	}
 
 	// Initialize query cache
@@ -285,7 +294,10 @@ func (s *Server) relayQueries(ctx context.Context, clientConn, writerConn net.Co
 
 		query := protocol.ExtractQueryText(msg.Payload)
 		route := session.Route(query)
-		slog.Debug("query routed", "sql", query, "route", routeName(route))
+		target := routeName(route)
+		slog.Debug("query routed", "sql", query, "route", target)
+
+		start := time.Now()
 
 		if route == router.RouteWriter {
 			s.handleWriteQuery(clientConn, writerConn, msg, query)
@@ -294,6 +306,11 @@ func (s *Server) relayQueries(ctx context.Context, clientConn, writerConn net.Co
 				slog.Error("handle read query", "error", err)
 				return
 			}
+		}
+
+		if s.metrics != nil {
+			s.metrics.QueriesRouted.WithLabelValues(target).Inc()
+			s.metrics.QueryDuration.WithLabelValues(target).Observe(time.Since(start).Seconds())
 		}
 	}
 }
@@ -310,6 +327,10 @@ func (s *Server) handleWriteQuery(clientConn, writerConn net.Conn, msg *protocol
 		tables := router.ExtractTables(query)
 		for _, table := range tables {
 			s.queryCache.InvalidateTable(table)
+			if s.metrics != nil {
+				s.metrics.CacheInvalidations.Inc()
+				s.metrics.CacheEntries.Set(float64(s.queryCache.Len()))
+			}
 			slog.Debug("cache invalidated", "table", table)
 		}
 	}
@@ -322,8 +343,14 @@ func (s *Server) handleReadQuery(ctx context.Context, clientConn, writerConn net
 		key := cache.CacheKey(query)
 		if cached := s.queryCache.Get(key); cached != nil {
 			slog.Debug("cache hit", "sql", query)
+			if s.metrics != nil {
+				s.metrics.CacheHits.Inc()
+			}
 			_, err := clientConn.Write(cached)
 			return err
+		}
+		if s.metrics != nil {
+			s.metrics.CacheMisses.Inc()
 		}
 	}
 
@@ -331,19 +358,33 @@ func (s *Server) handleReadQuery(ctx context.Context, clientConn, writerConn net
 	readerAddr := s.balancer.Next()
 	if readerAddr == "" {
 		slog.Warn("no healthy reader, fallback to writer")
+		if s.metrics != nil {
+			s.metrics.ReaderFallback.Inc()
+		}
 		return s.forwardAndRelay(clientConn, writerConn, msg)
 	}
 
 	rPool, ok := s.readerPools[readerAddr]
 	if !ok {
 		slog.Warn("no pool for reader, fallback to writer", "addr", readerAddr)
+		if s.metrics != nil {
+			s.metrics.ReaderFallback.Inc()
+		}
 		return s.forwardAndRelay(clientConn, writerConn, msg)
 	}
 
+	acquireStart := time.Now()
 	rConn, err := rPool.Acquire(ctx)
 	if err != nil {
 		slog.Warn("acquire reader failed, fallback to writer", "addr", readerAddr, "error", err)
+		if s.metrics != nil {
+			s.metrics.ReaderFallback.Inc()
+		}
 		return s.forwardAndRelay(clientConn, writerConn, msg)
+	}
+	if s.metrics != nil {
+		s.metrics.PoolAcquires.WithLabelValues("reader", readerAddr).Inc()
+		s.metrics.PoolAcquireDur.WithLabelValues("reader", readerAddr).Observe(time.Since(acquireStart).Seconds())
 	}
 
 	// Forward query to reader
@@ -363,6 +404,9 @@ func (s *Server) handleReadQuery(ctx context.Context, clientConn, writerConn net
 		}
 		key := cache.CacheKey(query)
 		s.queryCache.Set(key, collected, nil)
+		if s.metrics != nil {
+			s.metrics.CacheEntries.Set(float64(s.queryCache.Len()))
+		}
 		slog.Debug("cache set", "sql", query, "size", len(collected))
 	} else {
 		if err := s.relayUntilReady(clientConn, rConn); err != nil {
