@@ -104,6 +104,20 @@ func checkNode(node *pg_query.Node, cfg FirewallConfig) FirewallResult {
 				Message: "TRUNCATE statement is blocked by firewall",
 			}
 		}
+
+	case *pg_query.Node_SelectStmt:
+		// Recursively check CTE (WITH clause) for hidden write operations
+		if wc := n.SelectStmt.GetWithClause(); wc != nil {
+			for _, cte := range wc.GetCtes() {
+				if ce := cte.GetCommonTableExpr(); ce != nil {
+					if q := ce.GetCtequery(); q != nil {
+						if result := checkNode(q, cfg); result.Blocked {
+							return result
+						}
+					}
+				}
+			}
+		}
 	}
 
 	return FirewallResult{}
