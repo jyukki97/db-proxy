@@ -148,3 +148,57 @@ func TestSession_UnnamedStatement(t *testing.T) {
 		t.Errorf("unnamed INSERT → %d, want RouteWriter", got)
 	}
 }
+
+func TestSession_MultiStatementCommit(t *testing.T) {
+	s := NewSession(0)
+
+	// Start transaction
+	s.Route("BEGIN")
+	if !s.InTransaction() {
+		t.Fatal("expected InTransaction=true")
+	}
+
+	// Multi-statement with COMMIT embedded
+	s.Route("SELECT 1; COMMIT;")
+	if s.InTransaction() {
+		t.Error("expected InTransaction=false after 'SELECT 1; COMMIT;'")
+	}
+
+	// After commit, reads should go to reader
+	if got := s.Route("SELECT * FROM users"); got != RouteReader {
+		t.Errorf("SELECT after multi-stmt COMMIT → %d, want RouteReader", got)
+	}
+}
+
+func TestSession_MultiStatementBegin(t *testing.T) {
+	s := NewSession(0)
+
+	// Multi-statement with BEGIN embedded
+	s.Route("SELECT 1; BEGIN;")
+	if !s.InTransaction() {
+		t.Error("expected InTransaction=true after 'SELECT 1; BEGIN;'")
+	}
+
+	// All subsequent queries should go to writer
+	if got := s.Route("SELECT * FROM users"); got != RouteWriter {
+		t.Errorf("SELECT in tx → %d, want RouteWriter", got)
+	}
+}
+
+func TestSplitStatements(t *testing.T) {
+	tests := []struct {
+		query string
+		want  int
+	}{
+		{"SELECT 1", 1},
+		{"SELECT 1; SELECT 2;", 2},
+		{"INSERT INTO t VALUES ('a;b'); SELECT 1;", 2}, // semicolon inside quotes
+		{"", 0},
+	}
+	for _, tt := range tests {
+		got := splitStatements(tt.query)
+		if len(got) != tt.want {
+			t.Errorf("splitStatements(%q) = %d stmts %v, want %d", tt.query, len(got), got, tt.want)
+		}
+	}
+}
