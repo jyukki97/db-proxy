@@ -15,13 +15,13 @@ func TestSemanticCacheKey_WhitespaceInsensitive(t *testing.T) {
 	}
 }
 
-func TestSemanticCacheKey_LiteralInsensitive(t *testing.T) {
-	// Same structure, different literal values → same fingerprint
+func TestSemanticCacheKey_LiteralSensitive(t *testing.T) {
+	// Same structure, different literal values → different keys (prevents cache collision)
 	k1 := SemanticCacheKey("SELECT * FROM users WHERE id = 1")
 	k2 := SemanticCacheKey("SELECT * FROM users WHERE id = 999")
 
-	if k1 != k2 {
-		t.Errorf("different literals should produce same fingerprint: key1 (%d) != key2 (%d)", k1, k2)
+	if k1 == k2 {
+		t.Errorf("different literals must produce different keys to prevent cache collision: %d", k1)
 	}
 }
 
