@@ -1,4 +1,4 @@
-## 완료된 Task (Phase 1-11)
+## 완료된 Task (Phase 1-13)
 
 모든 Task 완료됨.
 
@@ -384,3 +384,22 @@
 - **완료 기준**: 장시간 쿼리 실행 중 리로드 → 쿼리 정상 완료
 
 </details>
+
+### Phase 12: LSN 기반 Causal Consistency
+
+| Task | 작업 | 이슈/PR |
+|------|------|---------|
+| T12-1 | LSN 타입 및 비교 유틸리티 | #52 / #53 |
+| T12-2 | Writer LSN 트래킹 | #54 / #55 |
+| T12-3 | Reader LSN 폴링 및 LSN-Aware 밸런서 | #56 / #57 |
+| T12-4 | Causal Consistency E2E 테스트 | #58 / #59 |
+
+### Phase 13: AST 기반 쿼리 파서 + 쿼리 방화벽
+
+| Task | 작업 | 이슈/PR |
+|------|------|---------|
+| T13-1 | pg_query_go AST 파서 도입 | #60 / #61 |
+| T13-2 | Classify/ExtractTables AST 전환 | #62 / #63 |
+| T13-3 | 쿼리 방화벽 (Query Firewall) | #64 / #65 |
+| T13-4 | Semantic Cache Key (AST 정규화) | #66 / #67 |
+| T13-5 | AST 파서 테스트 및 벤치마크 | #68 / #69 |
