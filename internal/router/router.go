@@ -31,24 +31,22 @@ func NewSession(readAfterWriteDelay time.Duration) *Session {
 }
 
 // Route determines where to send the query based on session state and query type.
+// Handles semicolon-separated multi-statement queries by scanning all statements.
 func (s *Session) Route(query string) Route {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	upper := strings.ToUpper(strings.TrimSpace(query))
+	// Scan all statements in the query for transaction control
+	wasTx := s.inTransaction
+	s.updateTransactionState(query)
 
-	// Track transaction state
-	if strings.HasPrefix(upper, "BEGIN") || strings.HasPrefix(upper, "START TRANSACTION") {
-		s.inTransaction = true
-		return RouteWriter
-	}
-	if strings.HasPrefix(upper, "COMMIT") || strings.HasPrefix(upper, "ROLLBACK") {
-		s.inTransaction = false
+	// Transaction control statements always go to writer
+	if wasTx || s.inTransaction {
 		return RouteWriter
 	}
 
-	// All queries in a transaction go to writer
-	if s.inTransaction {
+	// Check if the query contains any transaction control keywords → writer
+	if containsTransactionKeyword(query) {
 		return RouteWriter
 	}
 
@@ -67,6 +65,68 @@ func (s *Session) Route(query string) Route {
 	}
 
 	return RouteReader
+}
+
+// updateTransactionState scans all statements in a (possibly multi-statement) query
+// and updates inTransaction accordingly. Handles "SELECT 1; COMMIT;" correctly.
+func (s *Session) updateTransactionState(query string) {
+	stmts := splitStatements(query)
+	for _, stmt := range stmts {
+		upper := strings.ToUpper(strings.TrimSpace(stmt))
+		if strings.HasPrefix(upper, "BEGIN") || strings.HasPrefix(upper, "START TRANSACTION") {
+			s.inTransaction = true
+		}
+		if strings.HasPrefix(upper, "COMMIT") || strings.HasPrefix(upper, "ROLLBACK") ||
+			strings.HasPrefix(upper, "END") {
+			s.inTransaction = false
+		}
+	}
+}
+
+// containsTransactionKeyword checks if any statement starts with BEGIN/COMMIT/ROLLBACK/END.
+func containsTransactionKeyword(query string) bool {
+	stmts := splitStatements(query)
+	for _, stmt := range stmts {
+		upper := strings.ToUpper(strings.TrimSpace(stmt))
+		if strings.HasPrefix(upper, "BEGIN") || strings.HasPrefix(upper, "START TRANSACTION") ||
+			strings.HasPrefix(upper, "COMMIT") || strings.HasPrefix(upper, "ROLLBACK") ||
+			strings.HasPrefix(upper, "END") {
+			return true
+		}
+	}
+	return false
+}
+
+// splitStatements splits a query string by semicolons, respecting quoted strings.
+func splitStatements(query string) []string {
+	var stmts []string
+	var current strings.Builder
+	inSingleQuote := false
+	inDoubleQuote := false
+
+	for i := 0; i < len(query); i++ {
+		ch := query[i]
+		switch {
+		case ch == '\'' && !inDoubleQuote:
+			inSingleQuote = !inSingleQuote
+			current.WriteByte(ch)
+		case ch == '"' && !inSingleQuote:
+			inDoubleQuote = !inDoubleQuote
+			current.WriteByte(ch)
+		case ch == ';' && !inSingleQuote && !inDoubleQuote:
+			s := strings.TrimSpace(current.String())
+			if s != "" {
+				stmts = append(stmts, s)
+			}
+			current.Reset()
+		default:
+			current.WriteByte(ch)
+		}
+	}
+	if s := strings.TrimSpace(current.String()); s != "" {
+		stmts = append(stmts, s)
+	}
+	return stmts
 }
 
 // InTransaction returns whether the session is currently in a transaction.
