@@ -264,7 +264,10 @@ func (s *Server) executeOnPool(ctx context.Context, sql string, p *pool.Pool) (*
 		return resp, nil // return result even if reset fails
 	}
 	// Drain reset response
-	drainUntilReady(conn)
+	if err := drainUntilReady(conn); err != nil {
+		p.Discard(conn)
+		return resp, nil
+	}
 	p.Release(conn)
 	return resp, nil
 }
@@ -326,11 +329,14 @@ func executeQuery(conn net.Conn, sql string) (*QueryResponse, error) {
 	}
 }
 
-func drainUntilReady(conn net.Conn) {
+func drainUntilReady(conn net.Conn) error {
 	for {
 		msg, err := protocol.ReadMessage(conn)
-		if err != nil || msg.Type == protocol.MsgReadyForQuery {
-			return
+		if err != nil {
+			return err
+		}
+		if msg.Type == protocol.MsgReadyForQuery {
+			return nil
 		}
 	}
 }
