@@ -7,11 +7,35 @@ import (
 	pg_query "github.com/pganalyze/pg_query_go/v5"
 )
 
+// extractHintAST extracts routing hints from SQL comments using pg_query's lexer.
+// Unlike string-based extractHint, this correctly handles dollar quoting,
+// string literals, and other SQL edge cases that could be used for hint injection.
+func extractHintAST(query string) string {
+	result, err := pg_query.Scan(query)
+	if err != nil {
+		return extractHint(query)
+	}
+	for _, token := range result.GetTokens() {
+		if token.GetToken() == pg_query.Token_C_COMMENT {
+			start := token.GetStart()
+			end := token.GetEnd()
+			if int(start) >= 0 && int(end) <= len(query) {
+				comment := query[start:end]
+				matches := hintRegex.FindStringSubmatch(comment)
+				if len(matches) >= 2 {
+					return matches[1]
+				}
+			}
+		}
+	}
+	return ""
+}
+
 // ClassifyAST determines whether a query is a read or write operation using AST parsing.
 // Falls back to string-based Classify on parse errors.
 func ClassifyAST(query string) QueryType {
-	// 1. Check for routing hint (same logic as string parser)
-	if hint := extractHint(query); hint != "" {
+	// 1. Check for routing hint using AST-based lexer
+	if hint := extractHintAST(query); hint != "" {
 		if hint == "writer" {
 			return QueryWrite
 		}

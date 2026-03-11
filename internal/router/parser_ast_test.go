@@ -200,6 +200,43 @@ func TestExtractTablesAST_MultiTable(t *testing.T) {
 	}
 }
 
+func TestClassifyAST_DollarQuotingHintInjection(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+		want  QueryType
+	}{
+		{
+			"hint inside dollar quote should be ignored",
+			`SELECT $$ /* route:writer */ $$ FROM readonly_table`,
+			QueryRead,
+		},
+		{
+			"hint inside tagged dollar quote should be ignored",
+			`SELECT $tag$ /* route:writer */ $tag$ FROM readonly_table`,
+			QueryRead,
+		},
+		{
+			"hint inside single-quoted string should be ignored",
+			`SELECT '/* route:writer */' FROM readonly_table`,
+			QueryRead,
+		},
+		{
+			"real hint outside quotes should work",
+			`/* route:writer */ SELECT * FROM users`,
+			QueryWrite,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ClassifyAST(tt.query)
+			if got != tt.want {
+				t.Errorf("ClassifyAST(%q) = %d, want %d", tt.query, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestExtractTablesAST_QuotedNames(t *testing.T) {
 	tests := []struct {
 		name  string
