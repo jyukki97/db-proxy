@@ -52,17 +52,17 @@ func TestNew(t *testing.T) {
 	}
 
 	expected := []string{
-		"dbproxy_queries_routed_total",
-		"dbproxy_query_duration_seconds",
-		"dbproxy_cache_hits_total",
-		"dbproxy_cache_misses_total",
-		"dbproxy_cache_entries",
-		"dbproxy_cache_invalidations_total",
-		"dbproxy_pool_connections_open",
-		"dbproxy_pool_connections_idle",
-		"dbproxy_pool_acquires_total",
-		"dbproxy_pool_acquire_duration_seconds",
-		"dbproxy_reader_fallback_total",
+		"pgmux_queries_routed_total",
+		"pgmux_query_duration_seconds",
+		"pgmux_cache_hits_total",
+		"pgmux_cache_misses_total",
+		"pgmux_cache_entries",
+		"pgmux_cache_invalidations_total",
+		"pgmux_pool_connections_open",
+		"pgmux_pool_connections_idle",
+		"pgmux_pool_acquires_total",
+		"pgmux_pool_acquire_duration_seconds",
+		"pgmux_reader_fallback_total",
 	}
 
 	for _, name := range expected {

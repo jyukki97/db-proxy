@@ -1,14 +1,14 @@
 {{/*
 Expand the name of the chart.
 */}}
-{{- define "db-proxy.name" -}}
+{{- define "pgmux.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
 Create a default fully qualified app name.
 */}}
-{{- define "db-proxy.fullname" -}}
+{{- define "pgmux.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
 {{- else }}
@@ -24,9 +24,9 @@ Create a default fully qualified app name.
 {{/*
 Common labels
 */}}
-{{- define "db-proxy.labels" -}}
-helm.sh/chart: {{ include "db-proxy.name" . }}-{{ .Chart.Version | replace "+" "_" }}
-{{ include "db-proxy.selectorLabels" . }}
+{{- define "pgmux.labels" -}}
+helm.sh/chart: {{ include "pgmux.name" . }}-{{ .Chart.Version | replace "+" "_" }}
+{{ include "pgmux.selectorLabels" . }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
@@ -34,7 +34,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{/*
 Selector labels
 */}}
-{{- define "db-proxy.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "db-proxy.name" . }}
+{{- define "pgmux.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "pgmux.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}

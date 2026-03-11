@@ -1,7 +1,7 @@
 replicaCount: 2
 
 image:
-  repository: db-proxy
+  repository: pgmux
   tag: latest
   pullPolicy: IfNotPresent
 
@@ -9,7 +9,7 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
-# db-proxy config.yaml contents
+# pgmux config.yaml contents
 config:
   proxy:
     listen: "0.0.0.0:5432"

@@ -215,7 +215,7 @@
 
 #### T7-1: Prometheus 메트릭 인프라 구현
 - **범위**: `internal/metrics/metrics.go`에 Metrics 구조체, Prometheus 레지스트리 등록, `/metrics` HTTP 엔드포인트
-- **완료 기준**: `curl localhost:9090/metrics` 응답 확인, `dbproxy_` 접두사 메트릭 노출
+- **완료 기준**: `curl localhost:9090/metrics` 응답 확인, `pgmux_` 접두사 메트릭 노출
 
 #### T7-2: 풀/캐시/라우팅 메트릭 추가
 - **범위**: server.go에서 쿼리 처리 시 메트릭 기록 — 라우팅 카운터, 쿼리 레이턴시, 캐시 hit/miss, 풀 상태
@@ -344,7 +344,7 @@
 - **완료 기준**: 초당 제한 초과 시 즉시 거부
 
 #### T10-4: Rate Limiter 프록시 통합
-- **범위**: `relayQueries()`에서 쿼리 처리 전 체크. 초과 시 PG ErrorResponse 반환. 메트릭: `dbproxy_rate_limited_total`
+- **범위**: `relayQueries()`에서 쿼리 처리 전 체크. 초과 시 PG ErrorResponse 반환. 메트릭: `pgmux_rate_limited_total`
 - **완료 기준**: 특정 클라이언트가 과도한 쿼리 시 프록시에서 거부
 
 #### T10-5: Circuit Breaker & Rate Limiter 테스트

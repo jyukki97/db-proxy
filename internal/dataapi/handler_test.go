@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/jyukki97/db-proxy/internal/config"
+	"github.com/jyukki97/pgmux/internal/config"
 )
 
 func testServer() *Server {

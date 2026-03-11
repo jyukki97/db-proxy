@@ -9,10 +9,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/jyukki97/db-proxy/internal/admin"
-	"github.com/jyukki97/db-proxy/internal/config"
-	"github.com/jyukki97/db-proxy/internal/dataapi"
-	"github.com/jyukki97/db-proxy/internal/proxy"
+	"github.com/jyukki97/pgmux/internal/admin"
+	"github.com/jyukki97/pgmux/internal/config"
+	"github.com/jyukki97/pgmux/internal/dataapi"
+	"github.com/jyukki97/pgmux/internal/proxy"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -95,7 +95,7 @@ func run() error {
 		}
 	}()
 
-	slog.Info("db-proxy starting", "listen", cfg.Proxy.Listen)
+	slog.Info("pgmux starting", "listen", cfg.Proxy.Listen)
 
 	return srv.Start(ctx)
 }

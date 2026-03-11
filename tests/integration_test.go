@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jyukki97/db-proxy/internal/cache"
-	"github.com/jyukki97/db-proxy/internal/router"
+	"github.com/jyukki97/pgmux/internal/cache"
+	"github.com/jyukki97/pgmux/internal/router"
 )
 
 // TestIntegration_RouterWithCache tests the full flow of routing + caching together.
