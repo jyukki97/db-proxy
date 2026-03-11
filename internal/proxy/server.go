@@ -468,12 +468,14 @@ func (s *Server) handleReadQuery(ctx context.Context, clientConn, writerConn net
 		if err != nil {
 			return fmt.Errorf("relay reader response: %w", err)
 		}
-		key := cache.CacheKey(query)
-		s.queryCache.Set(key, collected, nil)
-		if s.metrics != nil {
-			s.metrics.CacheEntries.Set(float64(s.queryCache.Len()))
+		if collected != nil { // nil means oversize, skip cache
+			key := cache.CacheKey(query)
+			s.queryCache.Set(key, collected, nil)
+			if s.metrics != nil {
+				s.metrics.CacheEntries.Set(float64(s.queryCache.Len()))
+			}
+			slog.Debug("cache set", "sql", query, "size", len(collected))
 		}
-		slog.Debug("cache set", "sql", query, "size", len(collected))
 	} else {
 		if err := s.relayUntilReady(clientConn, rConn); err != nil {
 			rPool.Discard(rConn)
@@ -546,8 +548,8 @@ func (s *Server) handleExtendedRead(ctx context.Context, clientConn, writerConn 
 		if err != nil {
 			return fmt.Errorf("relay reader extended response: %w", err)
 		}
-		// Cache the response keyed by the batch (first Parse query)
-		if len(buf) > 0 && buf[0].Type == protocol.MsgParse {
+		// Cache the response keyed by the batch (first Parse query), skip if oversize
+		if collected != nil && len(buf) > 0 && buf[0].Type == protocol.MsgParse {
 			_, query := protocol.ParseParseMessage(buf[0].Payload)
 			key := cache.CacheKey(query)
 			s.queryCache.Set(key, collected, nil)
@@ -592,9 +594,14 @@ func (s *Server) relayUntilReady(clientConn, backendConn net.Conn) error {
 	}
 }
 
-// relayAndCollect relays backend responses to client and collects all bytes for caching.
+// relayAndCollect relays backend responses to client and collects bytes for caching.
+// If the collected size exceeds maxResultSize, collection is abandoned (returns nil)
+// but relay to client continues until ReadyForQuery.
 func (s *Server) relayAndCollect(clientConn, backendConn net.Conn) ([]byte, error) {
+	maxSize := parseSize(s.cfg.Cache.MaxResultSize)
 	var buf []byte
+	oversize := false
+
 	for {
 		msg, err := protocol.ReadMessage(backendConn)
 		if err != nil {
@@ -607,14 +614,26 @@ func (s *Server) relayAndCollect(clientConn, backendConn net.Conn) ([]byte, erro
 		binary.BigEndian.PutUint32(msgBytes[1:5], uint32(4+len(msg.Payload)))
 		copy(msgBytes[5:], msg.Payload)
 
-		// Forward to client
+		// Forward to client (always, regardless of cache)
 		if _, err := clientConn.Write(msgBytes); err != nil {
 			return nil, fmt.Errorf("forward to client: %w", err)
 		}
 
-		buf = append(buf, msgBytes...)
+		// Collect for cache only if within size limit
+		if !oversize {
+			buf = append(buf, msgBytes...)
+			if maxSize > 0 && len(buf) > maxSize {
+				slog.Debug("relay collect: result exceeds max_result_size, discarding buffer",
+					"size", len(buf), "max", maxSize)
+				buf = nil // release memory immediately
+				oversize = true
+			}
+		}
 
 		if msg.Type == protocol.MsgReadyForQuery {
+			if oversize {
+				return nil, nil
+			}
 			return buf, nil
 		}
 	}
