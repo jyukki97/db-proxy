@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -18,15 +19,17 @@ import (
 type Server struct {
 	cfg         *config.Config
 	cache       *cache.Cache
+	invalidator *cache.Invalidator
 	readerPools map[string]*pool.Pool
 	mu          sync.RWMutex
 }
 
 // New creates a new Admin server.
-func New(cfg *config.Config, c *cache.Cache, readerPools map[string]*pool.Pool) *Server {
+func New(cfg *config.Config, c *cache.Cache, inv *cache.Invalidator, readerPools map[string]*pool.Pool) *Server {
 	return &Server{
 		cfg:         cfg,
 		cache:       c,
+		invalidator: inv,
 		readerPools: readerPools,
 	}
 }
@@ -160,6 +163,9 @@ func (s *Server) handleCacheFlush(w http.ResponseWriter, r *http.Request) {
 	if path != "" {
 		// Flush specific table
 		s.cache.InvalidateTable(path)
+		if s.invalidator != nil {
+			s.invalidator.Publish(context.Background(), []string{path})
+		}
 		slog.Info("admin: cache flushed for table", "table", path)
 		writeJSON(w, map[string]string{"status": "flushed", "table": path})
 		return
@@ -167,6 +173,9 @@ func (s *Server) handleCacheFlush(w http.ResponseWriter, r *http.Request) {
 
 	// Flush all
 	s.cache.FlushAll()
+	if s.invalidator != nil {
+		s.invalidator.PublishFlushAll(context.Background())
+	}
 	slog.Info("admin: full cache flush")
 	writeJSON(w, map[string]string{"status": "flushed"})
 }

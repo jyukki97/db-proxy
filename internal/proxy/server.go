@@ -20,15 +20,16 @@ import (
 )
 
 type Server struct {
-	cfg         *config.Config
-	listenAddr  string
-	writerAddr  string
-	readerPools map[string]*pool.Pool
-	balancer    *router.RoundRobin
-	queryCache  *cache.Cache
-	metrics     *metrics.Metrics
-	listener    net.Listener
-	wg          sync.WaitGroup
+	cfg          *config.Config
+	listenAddr   string
+	writerAddr   string
+	readerPools  map[string]*pool.Pool
+	balancer     *router.RoundRobin
+	queryCache   *cache.Cache
+	invalidator  *cache.Invalidator
+	metrics      *metrics.Metrics
+	listener     net.Listener
+	wg           sync.WaitGroup
 }
 
 func NewServer(cfg *config.Config) *Server {
@@ -63,6 +64,24 @@ func NewServer(cfg *config.Config) *Server {
 		slog.Info("query cache enabled",
 			"max_entries", cfg.Cache.MaxCacheEntries,
 			"ttl", cfg.Cache.CacheTTL)
+
+		// Initialize cross-instance cache invalidation via Redis Pub/Sub
+		if cfg.Cache.Invalidation.Mode == "pubsub" && cfg.Cache.Invalidation.RedisAddr != "" {
+			inv, err := cache.NewInvalidator(
+				cfg.Cache.Invalidation.RedisAddr,
+				cfg.Cache.Invalidation.Channel,
+				s.queryCache,
+			)
+			if err != nil {
+				slog.Error("cache invalidator init failed, falling back to local-only",
+					"error", err, "redis_addr", cfg.Cache.Invalidation.RedisAddr)
+			} else {
+				s.invalidator = inv
+				slog.Info("cache invalidation pubsub enabled",
+					"redis", cfg.Cache.Invalidation.RedisAddr,
+					"channel", cfg.Cache.Invalidation.Channel)
+			}
+		}
 	}
 
 	// Initialize reader connection pools (PG-aware via DialFunc)
@@ -111,6 +130,11 @@ func (s *Server) Start(ctx context.Context) error {
 	// Start balancer health check
 	s.balancer.StartHealthCheck(ctx, s.cfg.Pool.ConnectionTimeout)
 
+	// Start cache invalidation subscriber
+	if s.invalidator != nil {
+		go s.invalidator.Subscribe(ctx)
+	}
+
 	go func() {
 		<-ctx.Done()
 		ln.Close()
@@ -123,6 +147,9 @@ func (s *Server) Start(ctx context.Context) error {
 			case <-ctx.Done():
 				s.wg.Wait()
 				s.closeReaderPools()
+				if s.invalidator != nil {
+					s.invalidator.Close()
+				}
 				slog.Info("proxy shut down gracefully")
 				return nil
 			default:
@@ -399,6 +426,10 @@ func (s *Server) handleWriteQuery(clientConn, writerConn net.Conn, msg *protocol
 			}
 			slog.Debug("cache invalidated", "table", table)
 		}
+		// Broadcast invalidation to other proxy instances
+		if s.invalidator != nil && len(tables) > 0 {
+			s.invalidator.Publish(context.Background(), tables)
+		}
 	}
 }
 
@@ -659,6 +690,11 @@ func (s *Server) Cache() *cache.Cache {
 // ReaderPools returns the server's reader connection pools.
 func (s *Server) ReaderPools() map[string]*pool.Pool {
 	return s.readerPools
+}
+
+// Invalidator returns the server's cache invalidator (may be nil).
+func (s *Server) Invalidator() *cache.Invalidator {
+	return s.invalidator
 }
 
 func (s *Server) closeReaderPools() {

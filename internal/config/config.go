@@ -58,10 +58,17 @@ type RoutingConfig struct {
 }
 
 type CacheConfig struct {
-	Enabled        bool          `yaml:"enabled"`
-	CacheTTL       time.Duration `yaml:"cache_ttl"`
-	MaxCacheEntries int          `yaml:"max_cache_entries"`
-	MaxResultSize   string       `yaml:"max_result_size"`
+	Enabled         bool                   `yaml:"enabled"`
+	CacheTTL        time.Duration          `yaml:"cache_ttl"`
+	MaxCacheEntries int                    `yaml:"max_cache_entries"`
+	MaxResultSize   string                 `yaml:"max_result_size"`
+	Invalidation    CacheInvalidationConfig `yaml:"invalidation"`
+}
+
+type CacheInvalidationConfig struct {
+	Mode      string `yaml:"mode"`       // "local" (default) or "pubsub"
+	RedisAddr string `yaml:"redis_addr"` // Redis address for pubsub mode
+	Channel   string `yaml:"channel"`    // Redis channel name
 }
 
 func Load(path string) (*Config, error) {
@@ -114,6 +121,12 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Cache.MaxResultSize == "" {
 		c.Cache.MaxResultSize = "1MB"
+	}
+	if c.Cache.Invalidation.Mode == "" {
+		c.Cache.Invalidation.Mode = "local"
+	}
+	if c.Cache.Invalidation.Channel == "" {
+		c.Cache.Invalidation.Channel = "dbproxy:invalidate"
 	}
 	if c.Backend.User == "" {
 		c.Backend.User = "postgres"
