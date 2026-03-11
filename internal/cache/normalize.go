@@ -8,17 +8,25 @@ import (
 )
 
 // SemanticCacheKey generates a cache key from a normalized AST representation.
-// Semantically equivalent queries (different whitespace, literal values, WHERE clause order)
-// produce the same key. Falls back to CacheKey on parse failure.
+// Semantically equivalent queries (different whitespace, casing) produce the same key
+// while preserving literal values to prevent cross-query cache collisions.
+// Falls back to CacheKey on parse failure.
 func SemanticCacheKey(query string) uint64 {
-	// Step 1: Fingerprint — pg_query_go normalizes whitespace, casing, and replaces
-	// constants with placeholders. Structurally identical queries get the same fingerprint.
-	fp, err := pg_query.FingerprintToUInt64(query)
+	// Parse → Deparse normalizes whitespace and casing while preserving literal values.
+	// Unlike FingerprintToUInt64 which strips all constants, Deparse keeps them intact.
+	tree, err := pg_query.Parse(query)
 	if err != nil {
-		slog.Debug("semantic cache key: fingerprint failed, fallback", "error", err)
+		slog.Debug("semantic cache key: parse failed, fallback", "error", err)
 		return CacheKey(query)
 	}
-	return fp
+	deparsed, err := pg_query.Deparse(tree)
+	if err != nil {
+		slog.Debug("semantic cache key: deparse failed, fallback", "error", err)
+		return CacheKey(query)
+	}
+	h := fnv.New64a()
+	h.Write([]byte(deparsed))
+	return h.Sum64()
 }
 
 // NormalizeQuery returns a canonical string representation of the query
