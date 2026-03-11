@@ -22,9 +22,9 @@
 | W14 | Prepared Statement 라우팅 | Extended Query Parse에서 SQL 추출, reader 라우팅 | 완료 |
 | W15 | Admin API | HTTP 관리 인터페이스 (stats, health, cache flush) | 완료 |
 | W16 | Transaction Pooling | Writer 커넥션 다중화, 트랜잭션 레벨 풀링 | 완료 |
-| W17 | SSL/TLS + Front-end Auth | TLS Termination, 프록시 자체 인증 | 예정 |
-| W18 | Circuit Breaker & Rate Limiting | 연쇄 장애 방어, 트래픽 제한 | 예정 |
-| W19 | Zero-Downtime Reload | SIGHUP 무중단 설정 리로드 | 예정 |
+| W17 | SSL/TLS + Front-end Auth | TLS Termination, 프록시 자체 인증 | 완료 |
+| W18 | Circuit Breaker & Rate Limiting | 연쇄 장애 방어, 트래픽 제한 | 완료 |
+| W19 | Zero-Downtime Reload | SIGHUP 무중단 설정 리로드 | 완료 |
 
 ---
 
