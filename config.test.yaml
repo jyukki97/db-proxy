@@ -35,3 +35,7 @@ backend:
 metrics:
   enabled: true
   listen: "0.0.0.0:19090"
+
+admin:
+  enabled: true
+  listen: "0.0.0.0:19091"

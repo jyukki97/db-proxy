@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/jyukki97/db-proxy/internal/admin"
 	"github.com/jyukki97/db-proxy/internal/config"
 	"github.com/jyukki97/db-proxy/internal/proxy"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -57,6 +58,17 @@ func run() error {
 	}
 
 	srv := proxy.NewServer(cfg)
+
+	// Start Admin API server
+	if cfg.Admin.Enabled {
+		adminSrv := admin.New(cfg, srv.Cache(), srv.ReaderPools())
+		go func() {
+			if err := adminSrv.ListenAndServe(cfg.Admin.Listen); err != nil && err != http.ErrServerClosed {
+				slog.Error("admin server error", "error", err)
+			}
+		}()
+	}
+
 	slog.Info("db-proxy starting", "listen", cfg.Proxy.Listen)
 
 	return srv.Start(ctx)

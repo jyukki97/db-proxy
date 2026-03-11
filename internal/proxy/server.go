@@ -632,6 +632,16 @@ func (s *Server) sendError(conn net.Conn, msg string) {
 	protocol.WriteMessage(conn, protocol.MsgErrorResponse, payload)
 }
 
+// Cache returns the server's query cache (may be nil if disabled).
+func (s *Server) Cache() *cache.Cache {
+	return s.queryCache
+}
+
+// ReaderPools returns the server's reader connection pools.
+func (s *Server) ReaderPools() map[string]*pool.Pool {
+	return s.readerPools
+}
+
 func (s *Server) closeReaderPools() {
 	for addr, p := range s.readerPools {
 		p.Close()
