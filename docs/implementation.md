@@ -337,6 +337,8 @@ func (inv *Invalidator) OnWrite(query string) {
 | **15단계** | Audit Logging | 비동기 감사 로그, Slow Query 감지, Webhook 알림 |
 | **16단계** | Helm Chart | Multi-stage Dockerfile, K8s Helm Chart |
 | **17단계** | Serverless Data API | HTTP REST → PG Wire Protocol → JSON 응답 |
+| **18단계** | OpenTelemetry 분산 추적 | TracerProvider, Span 계측, Data API traceparent 전파 |
+| **19단계** | Config File Watch | fsnotify 파일 변경 감지, 자동 리로드 |
 
 ---
 
@@ -687,3 +689,58 @@ Data API는 기존 모든 컴포넌트를 재사용한다:
 - `cache.Cache` — 읽기 결과 캐싱 + 쓰기 시 무효화
 - `router.CheckFirewall()` — 위험 쿼리 차단
 - `resilience.RateLimiter` — 요청 제한
+
+---
+
+### 13. OpenTelemetry 분산 추적 구현
+
+#### TracerProvider 초기화
+
+`go.opentelemetry.io/otel`을 사용한다. `telemetry.Init(cfg)` 호출 시 exporter, sampler, resource를 설정하고, `enabled: false`이면 noop tracer로 동작한다.
+
+```go
+// internal/telemetry/telemetry.go
+func Init(cfg config.TelemetryConfig) (shutdown func(context.Context) error, err error) {
+    if !cfg.Enabled {
+        return func(context.Context) error { return nil }, nil
+    }
+    // Resource(service.name, service.version) + Exporter(otlp/stdout) + Sampler(ratio)
+    tp := sdktrace.NewTracerProvider(...)
+    otel.SetTracerProvider(tp)
+    otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+        propagation.TraceContext{}, propagation.Baggage{},
+    ))
+    return tp.Shutdown, nil
+}
+```
+
+#### Span 계측 위치
+
+Simple Query(`MsgQuery`) 처리 경로와 Extended Query(`MsgSync`) 처리 경로에 각각 Span을 삽입한다.
+Data API는 HTTP `traceparent` 헤더를 `otel.GetTextMapPropagator().Extract()`로 파싱하여 부모 Span으로 연결한다.
+
+---
+
+### 14. Config File Watch 구현
+
+#### fsnotify 기반 파일 감시
+
+`github.com/fsnotify/fsnotify`로 설정 파일의 부모 디렉토리를 감시한다. K8s ConfigMap은 symlink swap 방식이므로 `CREATE` 이벤트도 포함하여 감지한다.
+
+```go
+// internal/config/watcher.go
+type FileWatcher struct {
+    path     string
+    fileName string
+    onChange func()
+    watcher  *fsnotify.Watcher
+}
+
+func (fw *FileWatcher) Start(ctx context.Context) error {
+    dir := filepath.Dir(fw.path)
+    fw.watcher.Add(dir)
+    // 이벤트 수신 → 디바운싱(1초) → onChange 콜백
+}
+```
+
+`cmd/pgmux/main.go`에서 `config.watch: true`일 때 FileWatcher를 시작하며, 콜백은 기존 `reloadConfig()` 함수를 재사용한다.
