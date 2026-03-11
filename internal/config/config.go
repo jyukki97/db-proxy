@@ -25,12 +25,21 @@ type Config struct {
 	Firewall       FirewallConfig       `yaml:"firewall"`
 	Audit          AuditConfig          `yaml:"audit"`
 	DataAPI        DataAPIConfig        `yaml:"data_api"`
+	Telemetry      TelemetryConfig      `yaml:"telemetry"`
 }
 
 type DataAPIConfig struct {
 	Enabled bool     `yaml:"enabled"`
 	Listen  string   `yaml:"listen"`
 	APIKeys []string `yaml:"api_keys"`
+}
+
+type TelemetryConfig struct {
+	Enabled     bool    `yaml:"enabled"`
+	Exporter    string  `yaml:"exporter"`     // "otlp" or "stdout"
+	Endpoint    string  `yaml:"endpoint"`     // OTLP gRPC endpoint (e.g. "localhost:4317")
+	ServiceName string  `yaml:"service_name"`
+	SampleRatio float64 `yaml:"sample_ratio"` // 0.0 to 1.0
 }
 
 type AuditConfig struct {
@@ -236,6 +245,18 @@ func (c *Config) applyDefaults() {
 	}
 	if c.DataAPI.Listen == "" {
 		c.DataAPI.Listen = "0.0.0.0:8080"
+	}
+	if c.Telemetry.Exporter == "" {
+		c.Telemetry.Exporter = "otlp"
+	}
+	if c.Telemetry.Endpoint == "" {
+		c.Telemetry.Endpoint = "localhost:4317"
+	}
+	if c.Telemetry.ServiceName == "" {
+		c.Telemetry.ServiceName = "pgmux"
+	}
+	if c.Telemetry.SampleRatio <= 0 {
+		c.Telemetry.SampleRatio = 1.0
 	}
 }
 
