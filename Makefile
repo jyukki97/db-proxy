@@ -1,10 +1,10 @@
-BINARY_NAME=db-proxy
+BINARY_NAME=pgmux
 BUILD_DIR=bin
 
 .PHONY: build run test test-integration test-coverage bench lint clean docker-up docker-down docker-build
 
 build:
-	go build -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/db-proxy
+	go build -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/pgmux
 
 run: build
 	./$(BUILD_DIR)/$(BINARY_NAME)

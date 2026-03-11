@@ -13,14 +13,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jyukki97/db-proxy/internal/audit"
-	"github.com/jyukki97/db-proxy/internal/cache"
-	"github.com/jyukki97/db-proxy/internal/config"
-	"github.com/jyukki97/db-proxy/internal/metrics"
-	"github.com/jyukki97/db-proxy/internal/pool"
-	"github.com/jyukki97/db-proxy/internal/protocol"
-	"github.com/jyukki97/db-proxy/internal/resilience"
-	"github.com/jyukki97/db-proxy/internal/router"
+	"github.com/jyukki97/pgmux/internal/audit"
+	"github.com/jyukki97/pgmux/internal/cache"
+	"github.com/jyukki97/pgmux/internal/config"
+	"github.com/jyukki97/pgmux/internal/metrics"
+	"github.com/jyukki97/pgmux/internal/pool"
+	"github.com/jyukki97/pgmux/internal/protocol"
+	"github.com/jyukki97/pgmux/internal/resilience"
+	"github.com/jyukki97/pgmux/internal/router"
 )
 
 type Server struct {

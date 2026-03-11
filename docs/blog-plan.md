@@ -9,7 +9,7 @@
 
 ### 프로젝트 페이지
 
-`content/projects/db-proxy.md`에 등록 완료. (simple-queue-service와 동일한 형식)
+`content/projects/pgmux.md`에 등록 완료. (simple-queue-service와 동일한 형식)
 
 ---
 
@@ -17,7 +17,7 @@
 
 Phase 완료 시점마다 `content/posts/`에 시리즈 포스트를 작성한다.
 
-- **경로**: `content/posts/YYYY-MM-DD-db-proxy-N-제목.md`
+- **경로**: `content/posts/YYYY-MM-DD-pgmux-N-제목.md`
 
 | # | 시점 | 제목 (안) | 주요 내용 | 상태 |
 |---|------|-----------|-----------|------|

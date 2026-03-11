@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jyukki97/db-proxy/internal/cache"
-	"github.com/jyukki97/db-proxy/internal/router"
+	"github.com/jyukki97/pgmux/internal/cache"
+	"github.com/jyukki97/pgmux/internal/router"
 )
 
 func BenchmarkClassify_SELECT(b *testing.B) {

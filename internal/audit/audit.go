@@ -170,7 +170,7 @@ func (l *Logger) sendWebhook(e Event) {
 	l.lastWebhookMu.Unlock()
 
 	payload := map[string]any{
-		"text": "[db-proxy] Slow Query Detected",
+		"text": "[pgmux] Slow Query Detected",
 		"attachments": []map[string]any{
 			{
 				"color": "danger",

@@ -10,10 +10,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/jyukki97/db-proxy/internal/audit"
-	"github.com/jyukki97/db-proxy/internal/cache"
-	"github.com/jyukki97/db-proxy/internal/config"
-	"github.com/jyukki97/db-proxy/internal/pool"
+	"github.com/jyukki97/pgmux/internal/audit"
+	"github.com/jyukki97/pgmux/internal/cache"
+	"github.com/jyukki97/pgmux/internal/config"
+	"github.com/jyukki97/pgmux/internal/pool"
 )
 
 // Server is the Admin API HTTP server.

@@ -1,4 +1,4 @@
-module github.com/jyukki97/db-proxy
+module github.com/jyukki97/pgmux
 
 go 1.25.1
 

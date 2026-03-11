@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jyukki97/db-proxy/internal/protocol"
+	"github.com/jyukki97/pgmux/internal/protocol"
 	"golang.org/x/crypto/pbkdf2"
 )
 

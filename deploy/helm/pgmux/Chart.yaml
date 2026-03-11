@@ -1,5 +1,5 @@
 apiVersion: v2
-name: db-proxy
+name: pgmux
 description: A lightweight PostgreSQL proxy with connection pooling, R/W routing, and query caching
 type: application
 version: 0.1.0
@@ -9,6 +9,6 @@ keywords:
   - proxy
   - connection-pooling
   - database
-home: https://github.com/jyukki97/db-proxy
+home: https://github.com/jyukki97/pgmux
 sources:
-  - https://github.com/jyukki97/db-proxy
+  - https://github.com/jyukki97/pgmux

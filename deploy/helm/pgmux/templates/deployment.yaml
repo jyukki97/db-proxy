@@ -1,16 +1,16 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "db-proxy.fullname" . }}
+  name: {{ include "pgmux.fullname" . }}
   labels:
-    {{- include "db-proxy.labels" . | nindent 4 }}
+    {{- include "pgmux.labels" . | nindent 4 }}
 spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
   selector:
     matchLabels:
-      {{- include "db-proxy.selectorLabels" . | nindent 6 }}
+      {{- include "pgmux.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       annotations:
@@ -19,7 +19,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       labels:
-        {{- include "db-proxy.selectorLabels" . | nindent 8 }}
+        {{- include "pgmux.selectorLabels" . | nindent 8 }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -34,7 +34,7 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
-            - /etc/db-proxy/config.yaml
+            - /etc/pgmux/config.yaml
           ports:
             - name: pg
               containerPort: 5432
@@ -67,7 +67,7 @@ spec:
             periodSeconds: 5
           volumeMounts:
             - name: config
-              mountPath: /etc/db-proxy
+              mountPath: /etc/pgmux
               readOnly: true
           {{- with .Values.resources }}
           resources:
@@ -80,7 +80,7 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: {{ include "db-proxy.fullname" . }}
+            name: {{ include "pgmux.fullname" . }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

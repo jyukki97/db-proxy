@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jyukki97/db-proxy/internal/config"
+	"github.com/jyukki97/pgmux/internal/config"
 )
 
 func testConfig(listen string) *config.Config {

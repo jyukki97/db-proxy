@@ -79,7 +79,7 @@ func TestWebhookSend(t *testing.T) {
 			t.Errorf("decode payload: %v", err)
 		}
 
-		if text, ok := payload["text"].(string); !ok || text != "[db-proxy] Slow Query Detected" {
+		if text, ok := payload["text"].(string); !ok || text != "[pgmux] Slow Query Detected" {
 			t.Errorf("unexpected text: %v", payload["text"])
 		}
 

@@ -15,7 +15,7 @@ import (
 )
 
 // TestE2E_ProxyIntegration tests the full proxy with real PostgreSQL backends.
-// Requires: docker-compose up && go run ./cmd/db-proxy config.test.yaml
+// Requires: docker-compose up && go run ./cmd/pgmux config.test.yaml
 func TestE2E_ProxyIntegration(t *testing.T) {
 	proxyDSN := "postgres://postgres:postgres@127.0.0.1:15440/testdb?sslmode=disable"
 
@@ -129,7 +129,7 @@ func TestE2E_ProxyIntegration(t *testing.T) {
 }
 
 // TestE2E_TransactionPooling tests transaction-level connection pooling behavior.
-// Requires: docker-compose up && go run ./cmd/db-proxy config.test.yaml
+// Requires: docker-compose up && go run ./cmd/pgmux config.test.yaml
 func TestE2E_TransactionPooling(t *testing.T) {
 	proxyDSN := "postgres://postgres:postgres@127.0.0.1:15440/testdb?sslmode=disable"
 
@@ -454,7 +454,7 @@ func TestE2E_TransactionPooling(t *testing.T) {
 }
 
 // TestE2E_CausalConsistency tests that write-then-read sees fresh data.
-// Requires: docker-compose up && go run ./cmd/db-proxy config.test.yaml (with causal_consistency: true)
+// Requires: docker-compose up && go run ./cmd/pgmux config.test.yaml (with causal_consistency: true)
 func TestE2E_CausalConsistency(t *testing.T) {
 	proxyDSN := "postgres://postgres:postgres@127.0.0.1:15440/testdb?sslmode=disable"
 
@@ -510,7 +510,7 @@ func TestE2E_ProxyStartStop(t *testing.T) {
 		t.Skip("set E2E=1 to run")
 	}
 
-	binPath := "../bin/db-proxy"
+	binPath := "../bin/pgmux"
 	cfgPath := "../config.test.yaml"
 
 	cmd := exec.Command(binPath, cfgPath)

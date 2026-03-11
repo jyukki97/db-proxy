@@ -2,14 +2,14 @@
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: {{ include "db-proxy.fullname" . }}
+  name: {{ include "pgmux.fullname" . }}
   labels:
-    {{- include "db-proxy.labels" . | nindent 4 }}
+    {{- include "pgmux.labels" . | nindent 4 }}
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: {{ include "db-proxy.fullname" . }}
+    name: {{ include "pgmux.fullname" . }}
   minReplicas: {{ .Values.autoscaling.minReplicas }}
   maxReplicas: {{ .Values.autoscaling.maxReplicas }}
   metrics:

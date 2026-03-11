@@ -5,7 +5,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=1 GOOS=linux go build -o /db-proxy ./cmd/db-proxy
+RUN CGO_ENABLED=1 GOOS=linux go build -o /pgmux ./cmd/pgmux
 
 # Stage 2: Runtime
 FROM debian:bookworm-slim
@@ -13,8 +13,8 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /db-proxy /usr/local/bin/db-proxy
+COPY --from=builder /pgmux /usr/local/bin/pgmux
 
 EXPOSE 5432 9090 9091
-ENTRYPOINT ["db-proxy"]
+ENTRYPOINT ["pgmux"]
 CMD ["config.yaml"]

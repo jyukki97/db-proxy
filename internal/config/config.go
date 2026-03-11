@@ -196,7 +196,7 @@ func (c *Config) applyDefaults() {
 		c.Cache.Invalidation.Mode = "local"
 	}
 	if c.Cache.Invalidation.Channel == "" {
-		c.Cache.Invalidation.Channel = "dbproxy:invalidate"
+		c.Cache.Invalidation.Channel = "pgmux:invalidate"
 	}
 	if c.Backend.User == "" {
 		c.Backend.User = "postgres"
