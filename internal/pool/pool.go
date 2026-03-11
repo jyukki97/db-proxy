@@ -49,6 +49,7 @@ type Pool struct {
 	numOpen int
 	waitCh  chan struct{} // signals that a conn was released
 	closed  bool
+	done    chan struct{} // closed on Pool.Close() to stop background goroutines
 }
 
 func New(cfg Config) (*Pool, error) {
@@ -56,6 +57,7 @@ func New(cfg Config) (*Pool, error) {
 		cfg:    cfg,
 		idle:   make([]*Conn, 0, cfg.MaxConnections),
 		waitCh: make(chan struct{}, cfg.MaxConnections),
+		done:   make(chan struct{}),
 	}
 
 	// Pre-create min connections
@@ -151,7 +153,11 @@ func (p *Pool) Close() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	if p.closed {
+		return
+	}
 	p.closed = true
+	close(p.done) // stop health check goroutine
 	for _, conn := range p.idle {
 		conn.Close()
 	}
@@ -223,6 +229,8 @@ func (p *Pool) StartHealthCheck(ctx context.Context, interval time.Duration) {
 			select {
 			case <-ctx.Done():
 				return
+			case <-p.done:
+				return
 			case <-ticker.C:
 				p.healthCheck()
 			}
@@ -233,6 +241,10 @@ func (p *Pool) StartHealthCheck(ctx context.Context, interval time.Duration) {
 func (p *Pool) healthCheck() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	if p.closed {
+		return
+	}
 
 	alive := p.idle[:0]
 	for _, c := range p.idle {

@@ -236,3 +236,51 @@ func TestPool_HealthCheck(t *testing.T) {
 		t.Errorf("after healthcheck: numOpen = %d, want >= 2 (min_connections)", numOpen)
 	}
 }
+
+func TestPool_CloseStopsHealthCheck(t *testing.T) {
+	addr := startEchoServer(t)
+
+	p, err := New(Config{
+		Addr:           addr,
+		MinConnections: 2,
+		MaxConnections: 5,
+		IdleTimeout:    50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	p.StartHealthCheck(ctx, 30*time.Millisecond)
+
+	// Close the pool — should stop health check and not replenish
+	p.Close()
+
+	// Wait a bit to ensure health check would have fired if still running
+	time.Sleep(100 * time.Millisecond)
+
+	numOpen, numIdle := p.Stats()
+	if numOpen != 0 {
+		t.Errorf("after Close: numOpen = %d, want 0", numOpen)
+	}
+	if numIdle != 0 {
+		t.Errorf("after Close: numIdle = %d, want 0", numIdle)
+	}
+}
+
+func TestPool_CloseIdempotent(t *testing.T) {
+	addr := startEchoServer(t)
+
+	p, err := New(Config{
+		Addr:           addr,
+		MinConnections: 0,
+		MaxConnections: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Double close should not panic
+	p.Close()
+	p.Close()
+}
