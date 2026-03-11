@@ -1,0 +1,63 @@
+services:
+  primary:
+    image: postgres:16-alpine
+    container_name: db-proxy-primary
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: testdb
+    ports:
+      - "15432:5432"
+    volumes:
+      - ./docker/primary/init.sql:/docker-entrypoint-initdb.d/init.sql
+    command: >
+      postgres
+      -c wal_level=replica
+      -c max_wal_senders=3
+      -c max_replication_slots=3
+      -c hot_standby=on
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  replica1:
+    image: postgres:16-alpine
+    container_name: db-proxy-replica1
+    environment:
+      PGUSER: replicator
+      PGPASSWORD: replicator
+    ports:
+      - "15433:5432"
+    depends_on:
+      primary:
+        condition: service_healthy
+    volumes:
+      - ./docker/replica/setup.sh:/docker-entrypoint-initdb.d/setup.sh
+    entrypoint: /docker-entrypoint-initdb.d/setup.sh
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  replica2:
+    image: postgres:16-alpine
+    container_name: db-proxy-replica2
+    environment:
+      PGUSER: replicator
+      PGPASSWORD: replicator
+    ports:
+      - "15434:5432"
+    depends_on:
+      primary:
+        condition: service_healthy
+    volumes:
+      - ./docker/replica/setup.sh:/docker-entrypoint-initdb.d/setup.sh
+    entrypoint: /docker-entrypoint-initdb.d/setup.sh
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 10

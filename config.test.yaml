@@ -1,0 +1,28 @@
+proxy:
+  listen: "0.0.0.0:15440"
+
+writer:
+  host: "127.0.0.1"
+  port: 15432
+
+readers:
+  - host: "127.0.0.1"
+    port: 15433
+  - host: "127.0.0.1"
+    port: 15434
+
+pool:
+  min_connections: 2
+  max_connections: 10
+  idle_timeout: 5m
+  max_lifetime: 30m
+  connection_timeout: 3s
+
+routing:
+  read_after_write_delay: 500ms
+
+cache:
+  enabled: true
+  cache_ttl: 5s
+  max_cache_entries: 1000
+  max_result_size: "512KB"
