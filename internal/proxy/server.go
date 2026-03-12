@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jyukki97/pgmux/internal/audit"
@@ -38,6 +39,8 @@ type Server struct {
 	rateLimiter  *resilience.RateLimiter
 	auditLogger  *audit.Logger
 	wg           sync.WaitGroup
+	cancelMap    sync.Map         // cancelKeyPair → *cancelTarget
+	nextProxyPID atomic.Uint32
 }
 
 func NewServer(cfg *config.Config) *Server {
@@ -332,14 +335,27 @@ func (s *Server) handleConn(ctx context.Context, rawConn net.Conn) {
 		}
 	}
 
+	// Handle CancelRequest (new TCP connection for query cancellation)
+	if len(startup.Payload) >= 4 {
+		code := binary.BigEndian.Uint32(startup.Payload[0:4])
+		if code == protocol.CancelRequestCode {
+			s.handleCancelRequest(startup.Payload)
+			return
+		}
+	}
+
 	_, _, params := protocol.ParseStartupParams(startup.Payload)
 	slog.Info("client startup", "user", params["user"], "database", params["database"])
 
-	// 3. Authenticate client
+	// 3. Generate proxy cancel key for this session
+	ct := s.newCancelTarget()
+	defer s.removeCancelTarget(ct)
+
+	// 4. Authenticate client
 	cfg := s.getConfig()
 	if cfg.Auth.Enabled {
 		// Front-end auth: proxy authenticates the client directly using MD5.
-		if err := s.frontendAuth(clientConn, params["user"]); err != nil {
+		if err := s.frontendAuth(clientConn, params["user"], ct.proxyPID, ct.proxySecret); err != nil {
 			slog.Warn("frontend auth failed", "user", params["user"], "remote", rawConn.RemoteAddr(), "error", err)
 			return
 		}
@@ -362,7 +378,7 @@ func (s *Server) handleConn(ctx context.Context, rawConn net.Conn) {
 			return
 		}
 
-		if err := s.relayAuth(clientConn, authConn); err != nil {
+		if err := s.relayAuth(clientConn, authConn, ct.proxyPID, ct.proxySecret); err != nil {
 			authConn.Close()
 			slog.Error("auth relay", "error", err)
 			return
@@ -372,11 +388,11 @@ func (s *Server) handleConn(ctx context.Context, rawConn net.Conn) {
 
 	slog.Info("handshake complete", "remote", rawConn.RemoteAddr())
 
-	// 4. Create per-client session router
+	// 5. Create per-client session router
 	session := router.NewSession(cfg.Routing.ReadAfterWriteDelay, cfg.Routing.CausalConsistency)
 
-	// 5. Relay queries with transaction-level pooling
-	s.relayQueries(ctx, clientConn, session)
+	// 6. Relay queries with transaction-level pooling
+	s.relayQueries(ctx, clientConn, session, ct)
 }
 
 // Reload applies a new configuration without restarting the proxy.

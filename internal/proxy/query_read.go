@@ -18,7 +18,7 @@ import (
 
 // handleReadQueryTraced wraps handleReadQuery with OpenTelemetry child spans for
 // cache lookup, pool acquire, backend exec, and cache store.
-func (s *Server) handleReadQueryTraced(traceCtx, poolCtx context.Context, clientConn net.Conn, msg *protocol.Message, query string, session *router.Session) error {
+func (s *Server) handleReadQueryTraced(traceCtx, poolCtx context.Context, clientConn net.Conn, msg *protocol.Message, query string, session *router.Session, ct *cancelTarget) error {
 	// Cache lookup span
 	_, cacheLookupSpan := telemetry.Tracer().Start(traceCtx, "pgmux.cache.lookup")
 	if s.queryCache != nil {
@@ -53,7 +53,7 @@ func (s *Server) handleReadQueryTraced(traceCtx, poolCtx context.Context, client
 		if s.metrics != nil {
 			s.metrics.ReaderFallback.Inc()
 		}
-		return s.fallbackToWriter(poolCtx, clientConn, msg)
+		return s.fallbackToWriter(poolCtx, clientConn, msg, ct)
 	}
 
 	// Circuit breaker check for reader
@@ -63,7 +63,7 @@ func (s *Server) handleReadQueryTraced(traceCtx, poolCtx context.Context, client
 			if s.metrics != nil {
 				s.metrics.ReaderFallback.Inc()
 			}
-			return s.fallbackToWriter(poolCtx, clientConn, msg)
+			return s.fallbackToWriter(poolCtx, clientConn, msg, ct)
 		}
 	}
 
@@ -73,7 +73,7 @@ func (s *Server) handleReadQueryTraced(traceCtx, poolCtx context.Context, client
 		if s.metrics != nil {
 			s.metrics.ReaderFallback.Inc()
 		}
-		return s.fallbackToWriter(poolCtx, clientConn, msg)
+		return s.fallbackToWriter(poolCtx, clientConn, msg, ct)
 	}
 
 	// Pool acquire span
@@ -92,7 +92,7 @@ func (s *Server) handleReadQueryTraced(traceCtx, poolCtx context.Context, client
 		if cb, ok := s.getReaderCB(readerAddr); ok {
 			cb.RecordFailure()
 		}
-		return s.fallbackToWriter(poolCtx, clientConn, msg)
+		return s.fallbackToWriter(poolCtx, clientConn, msg, ct)
 	}
 	acquireSpan.End()
 	if s.metrics != nil {
@@ -105,18 +105,22 @@ func (s *Server) handleReadQueryTraced(traceCtx, poolCtx context.Context, client
 		trace.WithAttributes(attribute.String("pgmux.route", "reader")),
 	)
 
+	ct.setFromConn(readerAddr, rConn)
+
 	// Forward query to reader
 	if err := protocol.WriteMessage(rConn, msg.Type, msg.Payload); err != nil {
+		ct.clear()
 		execSpan.SetStatus(codes.Error, err.Error())
 		execSpan.End()
 		slog.Error("forward to reader", "addr", readerAddr, "error", err)
 		rPool.Discard(rConn)
-		return s.fallbackToWriter(poolCtx, clientConn, msg)
+		return s.fallbackToWriter(poolCtx, clientConn, msg, ct)
 	}
 
 	// Relay response and collect bytes for caching
 	if s.queryCache != nil {
 		collected, err := s.relayAndCollect(clientConn, rConn)
+		ct.clear()
 		execSpan.End()
 		if err != nil {
 			rPool.Discard(rConn)
@@ -139,6 +143,7 @@ func (s *Server) handleReadQueryTraced(traceCtx, poolCtx context.Context, client
 		}
 	} else {
 		if err := s.relayUntilReady(clientConn, rConn); err != nil {
+			ct.clear()
 			execSpan.SetStatus(codes.Error, err.Error())
 			execSpan.End()
 			rPool.Discard(rConn)
@@ -147,6 +152,7 @@ func (s *Server) handleReadQueryTraced(traceCtx, poolCtx context.Context, client
 			}
 			return fmt.Errorf("relay reader response: %w", err)
 		}
+		ct.clear()
 		rPool.Release(rConn)
 		execSpan.End()
 	}
@@ -158,7 +164,7 @@ func (s *Server) handleReadQueryTraced(traceCtx, poolCtx context.Context, client
 }
 
 // handleReadQuery checks cache, acquires a reader from pool, or falls back to writer.
-func (s *Server) handleReadQuery(ctx context.Context, clientConn net.Conn, msg *protocol.Message, query string, session *router.Session) error {
+func (s *Server) handleReadQuery(ctx context.Context, clientConn net.Conn, msg *protocol.Message, query string, session *router.Session, ct *cancelTarget) error {
 	// Check cache
 	if s.queryCache != nil {
 		key := s.cacheKey(query)
@@ -188,7 +194,7 @@ func (s *Server) handleReadQuery(ctx context.Context, clientConn net.Conn, msg *
 		if s.metrics != nil {
 			s.metrics.ReaderFallback.Inc()
 		}
-		return s.fallbackToWriter(ctx, clientConn, msg)
+		return s.fallbackToWriter(ctx, clientConn, msg, ct)
 	}
 
 	// Circuit breaker check for reader
@@ -198,7 +204,7 @@ func (s *Server) handleReadQuery(ctx context.Context, clientConn net.Conn, msg *
 			if s.metrics != nil {
 				s.metrics.ReaderFallback.Inc()
 			}
-			return s.fallbackToWriter(ctx, clientConn, msg)
+			return s.fallbackToWriter(ctx, clientConn, msg, ct)
 		}
 	}
 
@@ -208,7 +214,7 @@ func (s *Server) handleReadQuery(ctx context.Context, clientConn net.Conn, msg *
 		if s.metrics != nil {
 			s.metrics.ReaderFallback.Inc()
 		}
-		return s.fallbackToWriter(ctx, clientConn, msg)
+		return s.fallbackToWriter(ctx, clientConn, msg, ct)
 	}
 
 	acquireStart := time.Now()
@@ -221,24 +227,28 @@ func (s *Server) handleReadQuery(ctx context.Context, clientConn net.Conn, msg *
 		if cb, ok := s.getReaderCB(readerAddr); ok {
 			cb.RecordFailure()
 		}
-		return s.fallbackToWriter(ctx, clientConn, msg)
+		return s.fallbackToWriter(ctx, clientConn, msg, ct)
 	}
 	if s.metrics != nil {
 		s.metrics.PoolAcquires.WithLabelValues("reader", readerAddr).Inc()
 		s.metrics.PoolAcquireDur.WithLabelValues("reader", readerAddr).Observe(time.Since(acquireStart).Seconds())
 	}
 
+	ct.setFromConn(readerAddr, rConn)
+
 	// Forward query to reader
 	if err := protocol.WriteMessage(rConn, msg.Type, msg.Payload); err != nil {
+		ct.clear()
 		slog.Error("forward to reader", "addr", readerAddr, "error", err)
 		rPool.Discard(rConn)
 		// Fallback to writer
-		return s.fallbackToWriter(ctx, clientConn, msg)
+		return s.fallbackToWriter(ctx, clientConn, msg, ct)
 	}
 
 	// Relay response and collect bytes for caching
 	if s.queryCache != nil {
 		collected, err := s.relayAndCollect(clientConn, rConn)
+		ct.clear()
 		rPool.Release(rConn)
 		if err != nil {
 			return fmt.Errorf("relay reader response: %w", err)
@@ -253,12 +263,14 @@ func (s *Server) handleReadQuery(ctx context.Context, clientConn net.Conn, msg *
 		}
 	} else {
 		if err := s.relayUntilReady(clientConn, rConn); err != nil {
+			ct.clear()
 			rPool.Discard(rConn)
 			if cb, ok := s.getReaderCB(readerAddr); ok {
 				cb.RecordFailure()
 			}
 			return fmt.Errorf("relay reader response: %w", err)
 		}
+		ct.clear()
 		rPool.Release(rConn)
 	}
 

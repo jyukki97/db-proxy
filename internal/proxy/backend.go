@@ -77,7 +77,7 @@ func (s *Server) resetConn(conn net.Conn) error {
 }
 
 // fallbackToWriter acquires a writer connection from the pool and forwards the query.
-func (s *Server) fallbackToWriter(ctx context.Context, clientConn net.Conn, msg *protocol.Message) error {
+func (s *Server) fallbackToWriter(ctx context.Context, clientConn net.Conn, msg *protocol.Message, ct *cancelTarget) error {
 	wConn, err := s.writerPool.Acquire(ctx)
 	if err != nil {
 		s.sendError(clientConn, "no available backend connections")
@@ -86,7 +86,9 @@ func (s *Server) fallbackToWriter(ctx context.Context, clientConn net.Conn, msg 
 	if s.metrics != nil {
 		s.metrics.PoolAcquires.WithLabelValues("writer", s.writerAddr).Inc()
 	}
+	ct.setFromConn(s.writerAddr, wConn)
 	err = s.forwardAndRelay(clientConn, wConn, msg)
+	ct.clear()
 	s.resetAndReleaseWriter(wConn)
 	return err
 }
