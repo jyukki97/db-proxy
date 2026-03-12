@@ -63,6 +63,8 @@ func (s *Server) ListenAndServe(addr string) error {
 }
 
 // handleHealth returns the health status of all backends.
+// All backend TCP checks run concurrently so that total latency is bounded
+// by a single check timeout (~2 s) regardless of backend count.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -77,16 +79,33 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writerAddr := fmt.Sprintf("%s:%d", cfg.Writer.Host, cfg.Writer.Port)
-	writerHealthy := checkTCP(writerAddr)
 
-	readers := make([]backendHealth, 0, len(cfg.Readers))
-	for _, r := range cfg.Readers {
-		addr := fmt.Sprintf("%s:%d", r.Host, r.Port)
-		readers = append(readers, backendHealth{
-			Addr:    addr,
-			Healthy: checkTCP(addr),
-		})
+	// Pre-allocate readers slice so each goroutine writes to its own index.
+	readers := make([]backendHealth, len(cfg.Readers))
+	for i, rd := range cfg.Readers {
+		readers[i].Addr = fmt.Sprintf("%s:%d", rd.Host, rd.Port)
 	}
+
+	var wg sync.WaitGroup
+	var writerHealthy bool
+
+	// Check writer concurrently.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		writerHealthy = checkTCP(writerAddr)
+	}()
+
+	// Check all readers concurrently.
+	for i := range readers {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			readers[idx].Healthy = checkTCP(readers[idx].Addr)
+		}(i)
+	}
+
+	wg.Wait()
 
 	resp := map[string]any{
 		"writer":  backendHealth{Addr: writerAddr, Healthy: writerHealthy},
