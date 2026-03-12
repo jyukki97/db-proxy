@@ -230,7 +230,7 @@ func (s *Server) executeRead(ctx context.Context, sql string, pq *router.ParsedQ
 	// Cache lookup span
 	_, cacheLookupSpan := telemetry.Tracer().Start(ctx, "pgmux.cache.lookup")
 	if queryCache != nil {
-		key := s.cacheKeyParsed(sql, pq)
+		key := cache.WithNamespace(s.cacheKeyParsed(sql, pq), cache.NSDataAPI)
 		if cached := queryCache.Get(key); cached != nil {
 			if s.met != nil {
 				s.met.CacheHits.Inc()
@@ -278,9 +278,9 @@ func (s *Server) executeRead(ctx context.Context, sql string, pq *router.ParsedQ
 	// Cache store span
 	if queryCache != nil && resp != nil {
 		_, storeSpan := telemetry.Tracer().Start(ctx, "pgmux.cache.store")
-		key := s.cacheKeyParsed(sql, pq)
+		key := cache.WithNamespace(s.cacheKeyParsed(sql, pq), cache.NSDataAPI)
 		if data, err := json.Marshal(resp); err == nil {
-			tables := s.extractTablesParsed(sql, pq)
+			tables := s.extractReadTablesParsed(sql, pq)
 			queryCache.Set(key, data, tables)
 			if s.met != nil {
 				s.met.CacheEntries.Set(float64(queryCache.Len()))
@@ -689,6 +689,20 @@ func (s *Server) extractTablesParsed(sql string, pq *router.ParsedQuery) []strin
 		return router.ExtractTablesASTWithTree(pq)
 	}
 	return s.extractTables(sql)
+}
+
+func (s *Server) extractReadTables(sql string) []string {
+	if s.cfgFn().Routing.ASTParser {
+		return router.ExtractReadTablesAST(sql)
+	}
+	return router.ExtractReadTables(sql)
+}
+
+func (s *Server) extractReadTablesParsed(sql string, pq *router.ParsedQuery) []string {
+	if s.cfgFn().Routing.ASTParser && pq != nil {
+		return router.ExtractReadTablesASTWithTree(pq)
+	}
+	return s.extractReadTables(sql)
 }
 
 // truncateSQL returns the first 100 characters of a SQL statement for span attributes.

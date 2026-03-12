@@ -188,6 +188,16 @@ func ExtractReadTablesAST(query string) []string {
 		return ExtractReadTables(query)
 	}
 
+	return extractReadTablesFromTree(tree)
+}
+
+// ExtractReadTablesASTWithTree extracts read table names using a pre-parsed AST tree.
+func ExtractReadTablesASTWithTree(pq *ParsedQuery) []string {
+	return extractReadTablesFromTree(pq.Tree)
+}
+
+// extractReadTablesFromTree collects all RangeVar references from a parse tree.
+func extractReadTablesFromTree(tree *pg_query.ParseResult) []string {
 	seen := make(map[string]bool)
 	var tables []string
 
