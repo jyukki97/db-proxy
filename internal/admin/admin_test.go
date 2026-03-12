@@ -3,6 +3,7 @@ package admin
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -276,5 +277,174 @@ func TestHandleReload_MethodNotAllowed(t *testing.T) {
 
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("status = %d, want 405", w.Code)
+	}
+}
+
+func TestHandleHealth_ParallelTiming(t *testing.T) {
+	// All backends point to a non-routable address (RFC 5737 TEST-NET)
+	// to trigger the 2 s dial timeout. With 3 backends checked
+	// sequentially this would take ~6 s; parallel should finish in ~2 s.
+	cfg := &config.Config{
+		Writer: config.DBConfig{Host: "192.0.2.1", Port: 9999},
+		Readers: []config.DBConfig{
+			{Host: "192.0.2.1", Port: 9999},
+			{Host: "192.0.2.1", Port: 9999},
+		},
+	}
+
+	srv := New(
+		func() *config.Config { return cfg },
+		func() *cache.Cache { return nil },
+		func() *cache.Invalidator { return nil },
+		func() *pool.Pool { return nil },
+		func() map[string]*pool.Pool { return nil },
+		func() *audit.Logger { return nil },
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/health", nil)
+	w := httptest.NewRecorder()
+
+	start := time.Now()
+	srv.handleHealth(w, req)
+	elapsed := time.Since(start)
+
+	// Sequential would take ~6 s. Parallel should finish in ~2 s.
+	// Use 4 s as threshold to allow margin without flakiness.
+	if elapsed > 4*time.Second {
+		t.Errorf("health check took %v; expected < 4 s (parallel execution)", elapsed)
+	}
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var resp map[string]any
+	json.NewDecoder(w.Body).Decode(&resp)
+
+	writer := resp["writer"].(map[string]any)
+	if writer["healthy"] != false {
+		t.Error("writer should be unhealthy")
+	}
+	readers := resp["readers"].([]any)
+	if len(readers) != 2 {
+		t.Fatalf("expected 2 readers, got %d", len(readers))
+	}
+}
+
+func TestHandleHealth_LiveBackends(t *testing.T) {
+	// Start a real TCP listener so checkTCP succeeds.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+
+	lnAddr := ln.Addr().(*net.TCPAddr)
+	cfg := &config.Config{
+		Writer: config.DBConfig{Host: "127.0.0.1", Port: lnAddr.Port},
+		Readers: []config.DBConfig{
+			{Host: "127.0.0.1", Port: lnAddr.Port},
+			{Host: "127.0.0.1", Port: lnAddr.Port},
+		},
+	}
+
+	srv := New(
+		func() *config.Config { return cfg },
+		func() *cache.Cache { return nil },
+		func() *cache.Invalidator { return nil },
+		func() *pool.Pool { return nil },
+		func() map[string]*pool.Pool { return nil },
+		func() *audit.Logger { return nil },
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/health", nil)
+	w := httptest.NewRecorder()
+
+	srv.handleHealth(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var resp map[string]any
+	json.NewDecoder(w.Body).Decode(&resp)
+
+	writer := resp["writer"].(map[string]any)
+	if writer["healthy"] != true {
+		t.Error("writer should be healthy")
+	}
+	readers := resp["readers"].([]any)
+	if len(readers) != 2 {
+		t.Fatalf("expected 2 readers, got %d", len(readers))
+	}
+	for i, r := range readers {
+		rd := r.(map[string]any)
+		if rd["healthy"] != true {
+			t.Errorf("reader[%d] should be healthy", i)
+		}
+	}
+}
+
+func TestHandleHealth_NoReaders(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+
+	lnAddr := ln.Addr().(*net.TCPAddr)
+	cfg := &config.Config{
+		Writer:  config.DBConfig{Host: "127.0.0.1", Port: lnAddr.Port},
+		Readers: nil,
+	}
+
+	srv := New(
+		func() *config.Config { return cfg },
+		func() *cache.Cache { return nil },
+		func() *cache.Invalidator { return nil },
+		func() *pool.Pool { return nil },
+		func() map[string]*pool.Pool { return nil },
+		func() *audit.Logger { return nil },
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/health", nil)
+	w := httptest.NewRecorder()
+
+	srv.handleHealth(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var resp map[string]any
+	json.NewDecoder(w.Body).Decode(&resp)
+
+	writer := resp["writer"].(map[string]any)
+	if writer["healthy"] != true {
+		t.Error("writer should be healthy")
+	}
+	readers := resp["readers"].([]any)
+	if len(readers) != 0 {
+		t.Errorf("expected 0 readers, got %d", len(readers))
 	}
 }
