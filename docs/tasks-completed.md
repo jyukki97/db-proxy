@@ -492,3 +492,15 @@
 | Task | 작업 | 이슈/PR |
 |------|------|---------|
 | HF-4 | 클라이언트 핸들링 고루틴에 defer recover() 격리형 복구 도입 | #112 / #114 |
+
+### Hotfix: Data API Zombie Goroutine Leak
+
+| Task | 작업 | 이슈/PR |
+|------|------|---------|
+| HF-5 | Data API executeOnPool()에 context 취소 워치독 추가 (SetDeadline 패턴) | #115 / #117 |
+
+### Hotfix: Admin/DataAPI Dangling Pointer After Reload
+
+| Task | 작업 | 이슈/PR |
+|------|------|---------|
+| HF-6 | Admin/DataAPI 서버의 직접 포인터 → getter 함수 패턴으로 전환, 핫-리로드 안전성 확보 | #116 / #118 |
