@@ -41,6 +41,10 @@ const (
 // SSLRequestCode is the magic number for SSL negotiation
 const SSLRequestCode = 80877103
 
+// CancelRequestCode is the magic number for query cancellation.
+// Clients send this on a new TCP connection to cancel a running query.
+const CancelRequestCode = 80877102
+
 // MaxMessageSize is the maximum allowed payload size for a single PG message (16 MB).
 // Prevents OOM from malicious length headers.
 const MaxMessageSize = 16 * 1024 * 1024

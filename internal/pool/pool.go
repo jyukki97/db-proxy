@@ -9,10 +9,17 @@ import (
 	"time"
 )
 
+// BackendKeyHolder is implemented by connections that carry PostgreSQL BackendKeyData.
+type BackendKeyHolder interface {
+	BackendKey() (pid, secret uint32)
+}
+
 type Conn struct {
 	net.Conn
-	CreatedAt  time.Time
-	LastUsedAt time.Time
+	CreatedAt     time.Time
+	LastUsedAt    time.Time
+	BackendPID    uint32
+	BackendSecret uint32
 }
 
 func (c *Conn) expired(maxLifetime time.Duration) bool {
@@ -198,11 +205,15 @@ func (p *Pool) newConn() (*Conn, error) {
 		return nil, fmt.Errorf("dial %s: %w", p.cfg.Addr, err)
 	}
 	now := time.Now()
-	return &Conn{
+	c := &Conn{
 		Conn:       netConn,
 		CreatedAt:  now,
 		LastUsedAt: now,
-	}, nil
+	}
+	if bk, ok := netConn.(BackendKeyHolder); ok {
+		c.BackendPID, c.BackendSecret = bk.BackendKey()
+	}
+	return c, nil
 }
 
 // Ping checks if a connection is still alive.

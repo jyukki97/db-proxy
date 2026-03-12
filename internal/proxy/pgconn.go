@@ -16,8 +16,20 @@ import (
 	"golang.org/x/crypto/pbkdf2"
 )
 
+// backendKeyConn wraps a net.Conn with captured PostgreSQL BackendKeyData.
+type backendKeyConn struct {
+	net.Conn
+	pid       uint32
+	secretKey uint32
+}
+
+func (c *backendKeyConn) BackendKey() (uint32, uint32) {
+	return c.pid, c.secretKey
+}
+
 // pgConnect establishes an authenticated PostgreSQL connection.
 // Supports MD5 and SCRAM-SHA-256 authentication.
+// Returns a backendKeyConn that carries the backend's PID and secret key.
 func pgConnect(addr, user, password, database string) (net.Conn, error) {
 	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 	if err != nil {
@@ -35,6 +47,7 @@ func pgConnect(addr, user, password, database string) (net.Conn, error) {
 	}
 
 	// Handle authentication flow
+	var backendPID, backendSecret uint32
 	for {
 		msg, err := protocol.ReadMessage(conn)
 		if err != nil {
@@ -83,11 +96,17 @@ func pgConnect(addr, user, password, database string) (net.Conn, error) {
 			conn.Close()
 			return nil, fmt.Errorf("backend auth error")
 
+		case protocol.MsgBackendKeyData:
+			if len(msg.Payload) >= 8 {
+				backendPID = binary.BigEndian.Uint32(msg.Payload[0:4])
+				backendSecret = binary.BigEndian.Uint32(msg.Payload[4:8])
+			}
+
 		case protocol.MsgReadyForQuery:
-			return conn, nil
+			return &backendKeyConn{Conn: conn, pid: backendPID, secretKey: backendSecret}, nil
 
 		default:
-			// Skip ParameterStatus, BackendKeyData, etc.
+			// Skip ParameterStatus, etc.
 		}
 	}
 }

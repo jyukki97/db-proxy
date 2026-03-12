@@ -20,7 +20,7 @@ import (
 
 // relayQueries handles the main query loop with transaction-level connection pooling.
 // Writer connections are acquired from writerPool per query/transaction and released back.
-func (s *Server) relayQueries(ctx context.Context, clientConn net.Conn, session *router.Session) {
+func (s *Server) relayQueries(ctx context.Context, clientConn net.Conn, session *router.Session, ct *cancelTarget) {
 	// boundWriter is non-nil when a transaction is in progress.
 	// The connection stays bound from BEGIN until COMMIT/ROLLBACK.
 	var boundWriter *pool.Conn
@@ -159,7 +159,9 @@ func (s *Server) relayQueries(ctx context.Context, clientConn net.Conn, session 
 				_, execSpan := telemetry.Tracer().Start(queryCtx, "pgmux.backend.exec",
 					trace.WithAttributes(attribute.String("pgmux.route", "writer")),
 				)
+				ct.setFromConn(s.writerAddr, wConn)
 				s.handleWriteQuery(clientConn, wConn, msg, query, session)
+				ct.clear()
 				execSpan.End()
 
 				// Transaction lifecycle management
@@ -177,7 +179,7 @@ func (s *Server) relayQueries(ctx context.Context, clientConn net.Conn, session 
 				}
 				// If !acquired && still in transaction → keep using boundWriter
 			} else {
-				if err := s.handleReadQueryTraced(queryCtx, ctx, clientConn, msg, query, session); err != nil {
+				if err := s.handleReadQueryTraced(queryCtx, ctx, clientConn, msg, query, session, ct); err != nil {
 					querySpan.SetStatus(codes.Error, err.Error())
 					querySpan.End()
 					slog.Error("handle read query", "error", err)
@@ -296,7 +298,7 @@ func (s *Server) relayQueries(ctx context.Context, clientConn net.Conn, session 
 		case protocol.MsgDescribe:
 			if multiplexMode {
 				// In multiplex mode, handle Describe by forwarding to backend
-				if err := s.handleMultiplexDescribe(ctx, clientConn, msg, synth, boundWriter); err != nil {
+				if err := s.handleMultiplexDescribe(ctx, clientConn, msg, synth, boundWriter, ct); err != nil {
 					slog.Error("multiplex describe", "error", err)
 					return
 				}
@@ -348,7 +350,7 @@ func (s *Server) relayQueries(ctx context.Context, clientConn net.Conn, session 
 				slog.Debug("synthesized query", "sql", synthesized, "route", target)
 				extSpan.SetAttributes(attribute.String("db.statement", truncateStr(synthesized, 100)))
 
-				if err := s.executeSynthesizedQuery(extCtx, clientConn, synthesized, extRoute, session, &boundWriter, extTxStart, extTxEnd); err != nil {
+				if err := s.executeSynthesizedQuery(extCtx, clientConn, synthesized, extRoute, session, &boundWriter, extTxStart, extTxEnd, ct); err != nil {
 					extSpan.SetStatus(codes.Error, err.Error())
 					extSpan.End()
 					slog.Error("execute synthesized query", "error", err)
@@ -361,7 +363,7 @@ func (s *Server) relayQueries(ctx context.Context, clientConn net.Conn, session 
 			} else if extRoute == router.RouteReader && !session.InTransaction() && boundWriter == nil {
 				// Reader path (proxy mode)
 				readerAddr := s.balancer.Next()
-				if err := s.handleExtendedRead(extCtx, clientConn, extBuf, msg, readerAddr); err != nil {
+				if err := s.handleExtendedRead(extCtx, clientConn, extBuf, msg, readerAddr, ct); err != nil {
 					extSpan.SetStatus(codes.Error, err.Error())
 					extSpan.End()
 					slog.Error("extended read query", "error", err)
@@ -390,8 +392,10 @@ func (s *Server) relayQueries(ctx context.Context, clientConn net.Conn, session 
 				)
 
 				// Forward all buffered messages + Sync to writer
+				ct.setFromConn(s.writerAddr, wConn)
 				writeErr := s.forwardExtBatch(wConn, extBuf, msg)
 				if writeErr != nil {
+					ct.clear()
 					execSpan.SetStatus(codes.Error, writeErr.Error())
 					execSpan.End()
 					extSpan.SetStatus(codes.Error, "forward ext batch failed")
@@ -407,6 +411,7 @@ func (s *Server) relayQueries(ctx context.Context, clientConn net.Conn, session 
 				}
 
 				if err := s.relayUntilReady(clientConn, wConn); err != nil {
+					ct.clear()
 					execSpan.SetStatus(codes.Error, err.Error())
 					execSpan.End()
 					extSpan.SetStatus(codes.Error, "relay writer response failed")
@@ -420,6 +425,7 @@ func (s *Server) relayQueries(ctx context.Context, clientConn net.Conn, session 
 					}
 					return
 				}
+				ct.clear()
 				execSpan.End()
 
 				// Update transaction state for Extended Query
