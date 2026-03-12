@@ -45,6 +45,20 @@ func CheckFirewall(query string, cfg FirewallConfig) FirewallResult {
 		return FirewallResult{}
 	}
 
+	return checkFirewallTree(tree, cfg)
+}
+
+// CheckFirewallWithTree inspects a query against firewall rules using a pre-parsed AST tree.
+func CheckFirewallWithTree(pq *ParsedQuery, cfg FirewallConfig) FirewallResult {
+	if !cfg.Enabled {
+		return FirewallResult{}
+	}
+
+	return checkFirewallTree(pq.Tree, cfg)
+}
+
+// checkFirewallTree checks firewall rules against a pre-parsed AST tree.
+func checkFirewallTree(tree *pg_query.ParseResult, cfg FirewallConfig) FirewallResult {
 	for _, rawStmt := range tree.GetStmts() {
 		stmt := rawStmt.GetStmt()
 		if stmt == nil {

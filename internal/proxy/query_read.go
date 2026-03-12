@@ -18,11 +18,11 @@ import (
 
 // handleReadQueryTraced wraps handleReadQuery with OpenTelemetry child spans for
 // cache lookup, pool acquire, backend exec, and cache store.
-func (s *Server) handleReadQueryTraced(traceCtx, poolCtx context.Context, clientConn net.Conn, msg *protocol.Message, query string, session *router.Session, ct *cancelTarget) error {
+func (s *Server) handleReadQueryTraced(traceCtx, poolCtx context.Context, clientConn net.Conn, msg *protocol.Message, query string, session *router.Session, ct *cancelTarget, pq *router.ParsedQuery) error {
 	// Cache lookup span
 	_, cacheLookupSpan := telemetry.Tracer().Start(traceCtx, "pgmux.cache.lookup")
 	if s.queryCache != nil {
-		key := s.cacheKey(query)
+		key := s.cacheKeyParsed(query, pq)
 		if cached := s.queryCache.Get(key); cached != nil {
 			cacheLookupSpan.SetAttributes(attribute.Bool("pgmux.cached", true))
 			cacheLookupSpan.End()
@@ -133,7 +133,7 @@ func (s *Server) handleReadQueryTraced(traceCtx, poolCtx context.Context, client
 		if collected != nil {
 			// Cache store span
 			_, storeSpan := telemetry.Tracer().Start(traceCtx, "pgmux.cache.store")
-			key := s.cacheKey(query)
+			key := s.cacheKeyParsed(query, pq)
 			tables := s.extractReadQueryTables(query)
 			s.queryCache.Set(key, collected, tables)
 			if s.metrics != nil {

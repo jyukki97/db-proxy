@@ -19,6 +19,17 @@ func SemanticCacheKey(query string) uint64 {
 		slog.Debug("semantic cache key: parse failed, fallback", "error", err)
 		return CacheKey(query)
 	}
+	return semanticCacheKeyFromTree(tree, query)
+}
+
+// SemanticCacheKeyWithTree generates a cache key using a pre-parsed AST tree,
+// avoiding a redundant pg_query.Parse() call.
+func SemanticCacheKeyWithTree(tree *pg_query.ParseResult, query string) uint64 {
+	return semanticCacheKeyFromTree(tree, query)
+}
+
+// semanticCacheKeyFromTree generates a cache key from a pre-parsed tree.
+func semanticCacheKeyFromTree(tree *pg_query.ParseResult, query string) uint64 {
 	deparsed, err := pg_query.Deparse(tree)
 	if err != nil {
 		slog.Debug("semantic cache key: deparse failed, fallback", "error", err)

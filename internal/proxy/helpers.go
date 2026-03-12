@@ -49,12 +49,28 @@ func (s *Server) cacheKey(query string) uint64 {
 	return cache.CacheKey(query)
 }
 
+// cacheKeyParsed uses a pre-parsed AST tree for semantic cache key generation.
+func (s *Server) cacheKeyParsed(query string, pq *router.ParsedQuery) uint64 {
+	if s.getConfig().Routing.ASTParser && pq != nil {
+		return cache.SemanticCacheKeyWithTree(pq.Tree, query)
+	}
+	return s.cacheKey(query)
+}
+
 // classifyQuery uses AST or string parser based on config.
 func (s *Server) classifyQuery(query string) router.QueryType {
 	if s.getConfig().Routing.ASTParser {
 		return router.ClassifyAST(query)
 	}
 	return router.Classify(query)
+}
+
+// classifyQueryParsed uses a pre-parsed AST tree for query classification.
+func (s *Server) classifyQueryParsed(query string, pq *router.ParsedQuery) router.QueryType {
+	if s.getConfig().Routing.ASTParser && pq != nil {
+		return router.ClassifyASTWithTree(query, pq)
+	}
+	return s.classifyQuery(query)
 }
 
 // extractQueryTables uses AST or string parser based on config.
@@ -71,6 +87,14 @@ func (s *Server) extractReadQueryTables(query string) []string {
 		return router.ExtractReadTablesAST(query)
 	}
 	return router.ExtractReadTables(query)
+}
+
+// extractQueryTablesParsed uses a pre-parsed AST tree for table extraction.
+func (s *Server) extractQueryTablesParsed(query string, pq *router.ParsedQuery) []string {
+	if s.getConfig().Routing.ASTParser && pq != nil {
+		return router.ExtractTablesASTWithTree(pq)
+	}
+	return s.extractQueryTables(query)
 }
 
 // truncateSQL returns the first 100 characters of a SQL statement for span attributes.
