@@ -32,6 +32,13 @@
 | W25 | Serverless Data API | HTTP REST → PG Protocol 변환, JSON 응답 | 완료 |
 | W26-27 | OpenTelemetry 분산 추적 | TracerProvider, Span 계측, Data API traceparent 전파 | 완료 |
 | W28 | Config File Watch | fsnotify 설정 파일 변경 감지, 자동 리로드 | 완료 |
+| W29 | Writer-Only Mode | readers 선택사항, writer-only 모드, 최소 설정 지원 | 완료 |
+| W30 | Hot Reload Race Fix | sync.RWMutex 도입으로 concurrent map 접근 방지 | 완료 |
+| W31 | Prepared Statement Multiplexing | Parse/Bind 인터셉트 → Simple Query 합성, SQL Injection 방어 | 완료 |
+| W32 | 프로토콜/메모리 핫픽스 | COPY 프로토콜 교착, Map 메모리 누수, 커넥션 오염, Panic 격리 | 완료 |
+| W33 | Zombie/Dangling 핫픽스 | Data API 좀비 고루틴 방지, Admin/DataAPI Dangling Pointer 수정 | 완료 |
+| W34 | server.go 리팩토링 | 2,259줄 → 9개 역할별 파일 분리 | 완료 |
+| W35 | 운영 안정성 핫픽스 | Balancer RLock, Graceful Shutdown, CancelRequest, DataAPI 핫픽스 | 완료 |
 
 ---
 

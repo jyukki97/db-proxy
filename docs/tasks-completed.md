@@ -505,8 +505,52 @@
 |------|------|---------|
 | HF-6 | Admin/DataAPI 서버의 직접 포인터 → getter 함수 패턴으로 전환, 핫-리로드 안전성 확보 | #116 / #118 |
 
+### Feature: Writer-Only Mode
+
+| Task | 작업 | 이슈/PR |
+|------|------|---------|
+| - | readers 선택사항으로 변경, writer-only 모드 지원 (최소 설정으로 사용 가능) | #101 / #102 |
+
+### Hotfix: Hot Reload Data Race
+
+| Task | 작업 | 이슈/PR |
+|------|------|---------|
+| - | sync.RWMutex 도입으로 hot reload 시 concurrent map read/write 방지 | #103 / #104 |
+
 ### Refactoring: server.go 파일 분리
 
 | Task | 작업 | 이슈/PR |
 |------|------|---------|
 | RF-1 | server.go (2,259줄) → 9개 역할별 파일 분리 (server, auth, query, query_read, query_extended, copy, backend, lsn, helpers) | #119 / #120 |
+
+### Hotfix: Balancer RLock
+
+| Task | 작업 | 이슈/PR |
+|------|------|---------|
+| - | RoundRobin의 MarkUnhealthy, checkBackends, HealthyCount에 RLock 추가 | #121 / #124 |
+
+### Hotfix: Graceful Shutdown Timeout
+
+| Task | 작업 | 이슈/PR |
+|------|------|---------|
+| - | Graceful shutdown 시 무한 대기 방지를 위한 타임아웃 추가 | #122 / #125 |
+
+### Hotfix: CancelRequest Protocol
+
+| Task | 작업 | 이슈/PR |
+|------|------|---------|
+| - | PostgreSQL CancelRequest 프로토콜 처리 (proxy/cancel.go 추가) | #123 / #126 |
+
+### Hotfix: DataAPI Live Config & Cache Broadcast
+
+| Task | 작업 | 이슈/PR |
+|------|------|---------|
+| - | Data API에서 매 요청마다 라이브 설정에서 API Key 읽기 (hot reload 대응) | #127 / #132 |
+| - | Data API 쓰기 시 다른 인스턴스에 캐시 무효화 브로드캐스트 | #128 / #133 |
+
+### Hotfix: ConfigMap Symlink & Audit Race
+
+| Task | 작업 | 이슈/PR |
+|------|------|---------|
+| - | ConfigMap symlink swap 감지를 모든 OS 이벤트 타입에서 처리 | #129 / #134 |
+| - | Reload() 주석 수정 + audit 테스트 race condition 수정 | #130, #131 / #135 |
