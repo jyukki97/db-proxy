@@ -32,9 +32,10 @@ type Config struct {
 
 // WebhookConfig holds webhook notification configuration.
 type WebhookConfig struct {
-	Enabled bool
-	URL     string
-	Timeout time.Duration
+	Enabled       bool
+	URL           string
+	Timeout       time.Duration
+	DedupInterval time.Duration // dedup window for same query; default 1m
 }
 
 // Logger is the audit logger that handles structured logging and webhook notifications.
@@ -58,11 +59,15 @@ type Logger struct {
 
 // New creates a new AuditLogger. Call Close() when done.
 func New(cfg Config) *Logger {
+	dedupInterval := cfg.Webhook.DedupInterval
+	if dedupInterval == 0 {
+		dedupInterval = time.Minute
+	}
 	l := &Logger{
 		cfg:             cfg,
 		eventCh:         make(chan Event, 1024),
 		lastWebhook:     make(map[string]time.Time),
-		webhookInterval: time.Minute,
+		webhookInterval: dedupInterval,
 		stopCh:          make(chan struct{}),
 	}
 
@@ -76,6 +81,9 @@ func New(cfg Config) *Logger {
 
 	l.wg.Add(1)
 	go l.processEvents()
+
+	l.wg.Add(1)
+	go l.cleanupWebhookDedup()
 
 	return l
 }
@@ -211,6 +219,30 @@ func (l *Logger) sendWebhook(e Event) {
 	l.webhookSent++
 	l.mu.Unlock()
 	slog.Debug("audit webhook sent", "query", truncateQuery(e.Query, 100))
+}
+
+// cleanupWebhookDedup periodically removes expired entries from lastWebhook map
+// to prevent unbounded memory growth.
+func (l *Logger) cleanupWebhookDedup() {
+	defer l.wg.Done()
+	ticker := time.NewTicker(l.webhookInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-l.stopCh:
+			return
+		case <-ticker.C:
+			l.lastWebhookMu.Lock()
+			now := time.Now()
+			for key, last := range l.lastWebhook {
+				if now.Sub(last) >= l.webhookInterval {
+					delete(l.lastWebhook, key)
+				}
+			}
+			l.lastWebhookMu.Unlock()
+		}
+	}
 }
 
 func truncateQuery(q string, maxLen int) string {
