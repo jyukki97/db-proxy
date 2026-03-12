@@ -504,3 +504,9 @@
 | Task | 작업 | 이슈/PR |
 |------|------|---------|
 | HF-6 | Admin/DataAPI 서버의 직접 포인터 → getter 함수 패턴으로 전환, 핫-리로드 안전성 확보 | #116 / #118 |
+
+### Refactoring: server.go 파일 분리
+
+| Task | 작업 | 이슈/PR |
+|------|------|---------|
+| RF-1 | server.go (2,259줄) → 9개 역할별 파일 분리 (server, auth, query, query_read, query_extended, copy, backend, lsn, helpers) | #119 / #120 |
