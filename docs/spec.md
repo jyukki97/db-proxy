@@ -158,6 +158,7 @@ AST 분석으로 위험한 쿼리를 프록시 단에서 사전 차단한다.
 ```yaml
 proxy:
   listen: "0.0.0.0:5432"
+  shutdown_timeout: 30s              # Graceful shutdown 타임아웃 (기본: 30s)
 
 writer:
   host: "primary.db.internal"

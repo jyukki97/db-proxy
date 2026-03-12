@@ -244,7 +244,19 @@ func (s *Server) Start(ctx context.Context) error {
 		if err != nil {
 			select {
 			case <-ctx.Done():
-				s.wg.Wait()
+				timeout := s.getConfig().Proxy.ShutdownTimeout
+				done := make(chan struct{})
+				go func() {
+					s.wg.Wait()
+					close(done)
+				}()
+				select {
+				case <-done:
+					slog.Info("all client connections drained")
+				case <-time.After(timeout):
+					slog.Warn("graceful shutdown timed out, forcing exit",
+						"timeout", timeout)
+				}
 				s.closePools()
 				if s.invalidator != nil {
 					s.invalidator.Close()
@@ -252,7 +264,7 @@ func (s *Server) Start(ctx context.Context) error {
 				if s.auditLogger != nil {
 					s.auditLogger.Close()
 				}
-				slog.Info("proxy shut down gracefully")
+				slog.Info("proxy shut down")
 				return nil
 			default:
 				slog.Error("accept connection", "error", err)
