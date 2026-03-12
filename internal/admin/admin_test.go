@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -232,6 +233,37 @@ func TestHandleReload_NotConfigured(t *testing.T) {
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want 503", w.Code)
+	}
+}
+
+func TestHandleReload_Error_ContentType(t *testing.T) {
+	srv, _ := testServer()
+	srv.SetReloadFunc(func() error {
+		return fmt.Errorf("config parse error")
+	})
+
+	ts := httptest.NewServer(http.HandlerFunc(srv.handleReload))
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", resp.StatusCode)
+	}
+
+	ct := resp.Header.Get("Content-Type")
+	if !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+
+	var body map[string]any
+	json.NewDecoder(resp.Body).Decode(&body)
+	if body["status"] != "error" {
+		t.Errorf("status = %q, want error", body["status"])
 	}
 }
 
