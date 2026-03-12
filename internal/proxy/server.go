@@ -1190,11 +1190,15 @@ func (s *Server) handleReadQueryTraced(traceCtx, poolCtx context.Context, client
 	// Relay response and collect bytes for caching
 	if s.queryCache != nil {
 		collected, err := s.relayAndCollect(clientConn, rConn)
-		rPool.Release(rConn)
 		execSpan.End()
 		if err != nil {
+			rPool.Discard(rConn)
+			if cb, ok := s.getReaderCB(readerAddr); ok {
+				cb.RecordFailure()
+			}
 			return fmt.Errorf("relay reader response: %w", err)
 		}
+		rPool.Release(rConn)
 		if collected != nil {
 			// Cache store span
 			_, storeSpan := telemetry.Tracer().Start(traceCtx, "pgmux.cache.store")
@@ -1968,11 +1972,12 @@ func (s *Server) pollReaderLSNs(ctx context.Context) {
 		}
 
 		lsn, err := s.queryReplayLSN(conn)
-		rPool.Release(conn)
 		if err != nil {
-			slog.Debug("LSN poll: query replay LSN failed", "addr", addr, "error", err)
+			rPool.Discard(conn)
+			slog.Debug("LSN poll: query replay LSN failed, discarding connection", "addr", addr, "error", err)
 			continue
 		}
+		rPool.Release(conn)
 
 		s.balancer.SetReplayLSN(addr, lsn)
 
