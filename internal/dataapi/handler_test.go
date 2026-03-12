@@ -26,7 +26,7 @@ func testServer() *Server {
 	}
 	return New(
 		func() *config.Config { return cfg },
-		nilPool, nilPools, nilBalancer, nilCache, nil, nilRateLimiter,
+		nilPool, nilPools, nilBalancer, nilCache, nil, nilRateLimiter, nil,
 	)
 }
 
@@ -105,7 +105,7 @@ func TestEmptySQL(t *testing.T) {
 			Enabled: true,
 		},
 	}
-	srv := New(func() *config.Config { return cfg }, nilPool, nilPools, nilBalancer, nilCache, nil, nilRateLimiter)
+	srv := New(func() *config.Config { return cfg }, nilPool, nilPools, nilBalancer, nilCache, nil, nilRateLimiter, nil)
 
 	body := `{"sql": ""}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/query", bytes.NewBufferString(body))
@@ -122,7 +122,7 @@ func TestInvalidBody(t *testing.T) {
 		Pool:    config.PoolConfig{ResetQuery: "DISCARD ALL"},
 		DataAPI: config.DataAPIConfig{Enabled: true},
 	}
-	srv := New(func() *config.Config { return cfg }, nilPool, nilPools, nilBalancer, nilCache, nil, nilRateLimiter)
+	srv := New(func() *config.Config { return cfg }, nilPool, nilPools, nilBalancer, nilCache, nil, nilRateLimiter, nil)
 
 	body := `not json`
 	req := httptest.NewRequest(http.MethodPost, "/v1/query", bytes.NewBufferString(body))
@@ -144,7 +144,7 @@ func TestFirewallBlock(t *testing.T) {
 		Routing: config.RoutingConfig{ASTParser: true},
 		DataAPI: config.DataAPIConfig{Enabled: true},
 	}
-	srv := New(func() *config.Config { return cfg }, nilPool, nilPools, nilBalancer, nilCache, nil, nilRateLimiter)
+	srv := New(func() *config.Config { return cfg }, nilPool, nilPools, nilBalancer, nilCache, nil, nilRateLimiter, nil)
 
 	body := `{"sql": "DELETE FROM users"}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/query", bytes.NewBufferString(body))
