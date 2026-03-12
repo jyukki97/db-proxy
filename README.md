@@ -81,6 +81,7 @@ psql -h 127.0.0.1 -p 5432 -U postgres -d testdb
 ```yaml
 proxy:
   listen: "0.0.0.0:5432"
+  shutdown_timeout: 30s              # Graceful shutdown 타임아웃 (기본: 30s)
 
 writer:
   host: "primary.db.internal"

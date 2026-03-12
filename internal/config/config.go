@@ -115,7 +115,8 @@ type BackendConfig struct {
 }
 
 type ProxyConfig struct {
-	Listen string `yaml:"listen"`
+	Listen          string        `yaml:"listen"`
+	ShutdownTimeout time.Duration `yaml:"shutdown_timeout"`
 }
 
 type DBConfig struct {
@@ -176,6 +177,9 @@ func Load(path string) (*Config, error) {
 func (c *Config) applyDefaults() {
 	if c.Proxy.Listen == "" {
 		c.Proxy.Listen = "0.0.0.0:5432"
+	}
+	if c.Proxy.ShutdownTimeout == 0 {
+		c.Proxy.ShutdownTimeout = 30 * time.Second
 	}
 	if c.Pool.MinConnections == 0 {
 		c.Pool.MinConnections = 2
