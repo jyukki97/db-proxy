@@ -30,6 +30,8 @@ type Server struct {
 
 // SetReloadFunc sets the function to call when reload is requested.
 func (s *Server) SetReloadFunc(fn func() error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.reloadFunc = fn
 }
 
@@ -255,19 +257,20 @@ func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mu.RLock()
+	s.mu.Lock()
 	fn := s.reloadFunc
-	s.mu.RUnlock()
-
 	if fn == nil {
+		s.mu.Unlock()
 		http.Error(w, "reload not configured", http.StatusServiceUnavailable)
 		return
 	}
+	defer s.mu.Unlock()
 
 	if err := fn(); err != nil {
 		slog.Error("admin: reload failed", "error", err)
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
-		writeJSON(w, map[string]any{"status": "error", "error": err.Error()})
+		json.NewEncoder(w).Encode(map[string]any{"status": "error", "error": err.Error()})
 		return
 	}
 
