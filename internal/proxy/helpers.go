@@ -89,6 +89,14 @@ func (s *Server) extractReadQueryTables(query string) []string {
 	return router.ExtractReadTables(query)
 }
 
+// extractReadQueryTablesParsed uses a pre-parsed AST tree for read table extraction.
+func (s *Server) extractReadQueryTablesParsed(query string, pq *router.ParsedQuery) []string {
+	if s.getConfig().Routing.ASTParser && pq != nil {
+		return router.ExtractReadTablesASTWithTree(pq)
+	}
+	return s.extractReadQueryTables(query)
+}
+
 // extractQueryTablesParsed uses a pre-parsed AST tree for table extraction.
 func (s *Server) extractQueryTablesParsed(query string, pq *router.ParsedQuery) []string {
 	if s.getConfig().Routing.ASTParser && pq != nil {
