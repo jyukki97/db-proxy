@@ -272,6 +272,14 @@ func (s *Server) Start(ctx context.Context) error {
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("panic in client handler, connection isolated",
+						"remote", conn.RemoteAddr(),
+						"panic", r,
+					)
+				}
+			}()
 			s.handleConn(ctx, conn)
 		}()
 	}
