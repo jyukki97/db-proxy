@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/jyukki97/pgmux/internal/cache"
 	"github.com/jyukki97/pgmux/internal/pool"
 	"github.com/jyukki97/pgmux/internal/protocol"
 	"github.com/jyukki97/pgmux/internal/router"
@@ -105,7 +106,7 @@ func (s *Server) handleExtendedRead(ctx context.Context, clientConn net.Conn, bu
 		// Cache the response keyed by the batch (first Parse query), skip if oversize
 		if collected != nil && len(buf) > 0 && buf[0].Type == protocol.MsgParse {
 			_, query := protocol.ParseParseMessage(buf[0].Payload)
-			key := s.cacheKey(query)
+			key := cache.WithNamespace(s.cacheKey(query), cache.NSExtended)
 			tables := s.extractReadQueryTables(query)
 			s.queryCache.Set(key, collected, tables)
 			if s.metrics != nil {
