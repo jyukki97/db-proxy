@@ -164,7 +164,7 @@ writer:
   host: "primary.db.internal"
   port: 5432
 
-readers:
+readers:                              # 선택사항 — 생략 시 모든 쿼리가 writer로 라우팅
   - host: "replica-1.db.internal"
     port: 5432
   - host: "replica-2.db.internal"
@@ -177,6 +177,7 @@ pool:
   max_lifetime: "1h"
   connection_timeout: "5s"
   reset_query: "DISCARD ALL"
+  prepared_statement_mode: "proxy"    # "proxy" (기본, 패스스루) | "multiplex" (Simple Query로 합성)
 
 routing:
   read_after_write_delay: "500ms"
@@ -195,6 +196,10 @@ cache:
   cache_ttl: "10s"
   max_cache_entries: 10000
   max_result_size: "1MB"
+  invalidation:
+    mode: "pubsub"                    # "local" (기본값) 또는 "pubsub" (Redis)
+    redis_addr: "localhost:6379"
+    channel: "pgmux:invalidate"
 
 audit:
   enabled: true
@@ -223,6 +228,16 @@ data_api:
   listen: "0.0.0.0:8080"
   api_keys:
     - "your-api-key-here"
+
+telemetry:
+  enabled: false
+  exporter: "otlp"                    # "otlp" (gRPC) 또는 "stdout"
+  endpoint: "localhost:4317"
+  service_name: "pgmux"
+  sample_ratio: 1.0
+
+config:
+  watch: true                         # 설정 파일 변경 감지 자동 리로드
 ```
 ### 9. Audit Logging & Slow Query Tracker
 
@@ -332,6 +347,10 @@ config:
 ---
 
 ### 14. 향후 고도화 아이디어 (Future Enhancements)
-- **Prepared Statement Multiplexing**: Parse/Bind를 인터셉트하여 Simple Query로 합성. Transaction Pooling에서 Prepared Statement 지원.
+- **Multi-Database Routing**: 단일 프록시 인스턴스에서 여러 데이터베이스를 동시 프록시 (StartupMessage의 `database` 필드로 분기).
+- **Auto Failover (Writer)**: Writer 장애 감지 시 standby 자동 promote 또는 새 Writer 주소로 전환.
+- **Query Mirroring (Shadow Traffic)**: 프로덕션 쿼리를 테스트 DB에도 fire-and-forget 전송.
 - **Multi-Tenant Routing**: 테넌트별 백엔드 라우팅 (단일 백엔드 아키텍처 변경 필요).
 - **K8s Operator (CRD)**: Helm 이상의 자동화가 필요할 때 별도 프로젝트로 구현.
+
+> 상세 로드맵은 `docs/tasks-next.md` 참고.

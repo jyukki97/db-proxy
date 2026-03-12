@@ -7,9 +7,13 @@
 | 언어 | Go | 고루틴 기반 동시성, net 라이브러리 성숙도, 단일 바이너리 배포 |
 | DB 프로토콜 | PostgreSQL wire protocol | 클라이언트가 일반 PG 드라이버로 접속 가능 |
 | 설정 | YAML (`gopkg.in/yaml.v3`) | 스펙 설정 예시와 일치 |
-| 캐시 | 인메모리 (`sync.Map` + container/list`) | 외부 의존 없이 LRU 구현 |
+| 캐시 | 인메모리 (`sync.Map` + `container/list`) | 외부 의존 없이 LRU 구현 |
 | SQL 파서 | `pg_query_go/v5` (cgo) | PostgreSQL 실제 C 파서 바인딩, AST 분류/방화벽/시맨틱 키 |
 | 로깅 | `slog` (표준 라이브러리) | 구조화 로깅, 외부 의존 없음 |
+| 메트릭 | `prometheus/client_golang` | Prometheus 표준 메트릭 노출 |
+| 분산 추적 | OpenTelemetry (`go.opentelemetry.io/otel`) | OTLP gRPC/stdout 익스포터, W3C TraceContext 전파 |
+| 캐시 무효화 | Redis Pub/Sub (`go-redis/v9`) | 다중 인스턴스 간 캐시 무효화 전파 |
+| 파일 감시 | `fsnotify` | 설정 파일 변경 감지, K8s ConfigMap symlink swap 지원 |
 
 ---
 
@@ -22,9 +26,10 @@ pgmux/
 │       └── main.go              # 진입점: 설정 로드 → 서버 시작
 ├── internal/
 │   ├── config/
-│   │   └── config.go            # YAML 파싱, 설정 구조체 정의
+│   │   ├── config.go            # YAML 파싱, 설정 구조체 정의
+│   │   └── watcher.go           # 설정 파일 변경 감시 (fsnotify, ConfigMap symlink swap)
 │   ├── proxy/
-│   │   ├── server.go            # Server 구조체, NewServer, Start, handleConn, Reload
+│   │   ├── server.go            # Server 구조체, NewServer, Start, handleConn, Reload, getters
 │   │   ├── auth.go              # 인증 핸드셰이크 (relayAuth, frontendAuth)
 │   │   ├── query.go             # 메인 쿼리 루프 (relayQueries)
 │   │   ├── query_read.go        # 읽기 쿼리 처리 (handleReadQuery, handleReadQueryTraced)
@@ -33,9 +38,11 @@ pgmux/
 │   │   ├── backend.go           # 백엔드 커넥션 관리 (acquire, reset, fallback)
 │   │   ├── lsn.go               # LSN 폴링 (Causal Consistency)
 │   │   ├── helpers.go           # 유틸리티 (sendError, parseSize, emitAuditEvent)
+│   │   ├── pgconn.go            # PG 인증 연결 (MD5, SCRAM-SHA-256)
+│   │   ├── synthesizer.go       # Prepared Statement → Simple Query 합성 (Multiplexing)
+│   │   └── cancel.go            # CancelRequest 프로토콜 처리
 │   ├── pool/
-│   │   ├── pool.go              # 커넥션 풀 핵심 로직
-│   │   └── health.go            # 헬스체크 고루틴
+│   │   └── pool.go              # 커넥션 풀 핵심 로직 + 헬스체크
 │   ├── router/
 │   │   ├── router.go            # Writer/Reader 라우팅 결정 (Causal Consistency)
 │   │   ├── parser.go            # 문자열 기반 쿼리 분류
@@ -46,15 +53,31 @@ pgmux/
 │   │   └── firewall.go          # 쿼리 방화벽 (위험 쿼리 차단)
 │   ├── cache/
 │   │   ├── cache.go             # LRU 캐시 구현
-│   │   ├── invalidator.go       # 쓰기 시 테이블별 캐시 무효화
-│   │   └── normalize.go         # 시맨틱 캐시 키 (AST Fingerprint)
+│   │   ├── invalidator.go       # Redis Pub/Sub 캐시 무효화 전파
+│   │   └── normalize.go         # 시맨틱 캐시 키 (AST Parse+Deparse)
+│   ├── protocol/
+│   │   ├── message.go           # PG 와이어 프로토콜 메시지 파싱
+│   │   └── literal.go           # PG 타입별 SQL 리터럴 직렬화 (Injection 방어)
+│   ├── resilience/
+│   │   ├── ratelimit.go         # Token Bucket Rate Limiter
+│   │   └── breaker.go           # Circuit Breaker (Closed/Open/Half-Open)
+│   ├── metrics/
+│   │   └── metrics.go           # Prometheus 메트릭
+│   ├── telemetry/
+│   │   └── telemetry.go         # OpenTelemetry 분산 추적
 │   ├── audit/
 │   │   └── audit.go             # 비동기 감사 로그 + Slow Query + Webhook
-│   └── dataapi/
-│       └── handler.go           # Serverless Data API HTTP 서버
+│   ├── dataapi/
+│   │   └── handler.go           # Serverless Data API HTTP 서버
+│   └── admin/
+│       └── admin.go             # Admin HTTP API
+├── tests/
+│   ├── e2e_test.go              # Docker 기반 E2E 테스트
+│   ├── integration_test.go      # 통합 테스트
+│   └── benchmark_test.go        # 벤치마크
 ├── deploy/
 │   └── helm/
-│       └── pgmux/            # Helm Chart (Chart.yaml, values.yaml, templates/)
+│       └── pgmux/               # Helm Chart (Chart.yaml, values.yaml, templates/)
 ├── Dockerfile                   # Multi-stage 빌드
 ├── docs/
 │   ├── spec.md
@@ -347,6 +370,9 @@ func (inv *Invalidator) OnWrite(query string) {
 | **17단계** | Serverless Data API | HTTP REST → PG Wire Protocol → JSON 응답 |
 | **18단계** | OpenTelemetry 분산 추적 | TracerProvider, Span 계측, Data API traceparent 전파 |
 | **19단계** | Config File Watch | fsnotify 파일 변경 감지, 자동 리로드 |
+| **20단계** | Prepared Statement Multiplexing | Parse/Bind 인터셉트 → Simple Query 합성, SQL Injection 방어 |
+
+> 모든 단계 완료. 상세 Task 목록은 `docs/tasks-completed.md`, 향후 로드맵은 `docs/tasks-next.md` 참고.
 
 ---
 
