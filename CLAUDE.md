@@ -37,6 +37,7 @@ internal/
   config/config.go             # 설정 파싱 (Backend, Metrics, Admin 포함)
   proxy/server.go              # TCP 리스너 + Pool/Router/Cache 통합
   proxy/pgconn.go              # PG 인증 연결 (MD5, SCRAM-SHA-256)
+  proxy/synthesizer.go         # Prepared Statement Multiplexing (Phase 19)
   pool/pool.go                 # 커넥션 풀링 (DialFunc, Discard)
   router/router.go, parser.go, balancer.go  # 쿼리 라우팅
   cache/cache.go               # LRU 캐시 + 테이블별 무효화
