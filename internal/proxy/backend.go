@@ -94,7 +94,7 @@ func (s *Server) fallbackToWriter(ctx context.Context, clientConn net.Conn, msg 
 }
 
 // handleWriteQuery forwards a write query to the writer and invalidates cache.
-func (s *Server) handleWriteQuery(clientConn net.Conn, writerConn net.Conn, msg *protocol.Message, query string, session *router.Session) {
+func (s *Server) handleWriteQuery(clientConn net.Conn, writerConn net.Conn, msg *protocol.Message, query string, session *router.Session, pq *router.ParsedQuery) {
 	if err := s.forwardAndRelay(clientConn, writerConn, msg); err != nil {
 		slog.Error("forward write to writer", "error", err)
 		if s.writerCB != nil {
@@ -107,7 +107,7 @@ func (s *Server) handleWriteQuery(clientConn net.Conn, writerConn net.Conn, msg 
 	}
 
 	// Track WAL LSN for causal consistency
-	if s.getConfig().Routing.CausalConsistency && s.classifyQuery(query) == router.QueryWrite {
+	if s.getConfig().Routing.CausalConsistency && s.classifyQueryParsed(query, pq) == router.QueryWrite {
 		if lsn, err := s.queryCurrentLSN(writerConn); err != nil {
 			slog.Warn("query WAL LSN after write", "error", err)
 		} else {
@@ -117,8 +117,8 @@ func (s *Server) handleWriteQuery(clientConn net.Conn, writerConn net.Conn, msg 
 	}
 
 	// Invalidate cache for affected tables
-	if s.queryCache != nil && s.classifyQuery(query) == router.QueryWrite {
-		tables := s.extractQueryTables(query)
+	if s.queryCache != nil && s.classifyQueryParsed(query, pq) == router.QueryWrite {
+		tables := s.extractQueryTablesParsed(query, pq)
 		for _, table := range tables {
 			s.queryCache.InvalidateTable(table)
 			if s.metrics != nil {

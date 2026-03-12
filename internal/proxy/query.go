@@ -86,16 +86,30 @@ func (s *Server) relayQueries(ctx context.Context, clientConn net.Conn, session 
 				),
 			)
 
-			// Firewall check
+			// Pre-parse AST once when AST mode is enabled
 			queryCfg := s.getConfig()
+			var parsedQuery *router.ParsedQuery
+			if queryCfg.Routing.ASTParser {
+				if pq, err := router.NewParsedQuery(query); err == nil {
+					parsedQuery = pq
+				}
+			}
+
+			// Firewall check
 			if queryCfg.Firewall.Enabled {
-				fwResult := router.CheckFirewall(query, router.FirewallConfig{
+				var fwResult router.FirewallResult
+				fwCfg := router.FirewallConfig{
 					Enabled:                 queryCfg.Firewall.Enabled,
 					BlockDeleteWithoutWhere: queryCfg.Firewall.BlockDeleteWithoutWhere,
 					BlockUpdateWithoutWhere: queryCfg.Firewall.BlockUpdateWithoutWhere,
 					BlockDropTable:          queryCfg.Firewall.BlockDropTable,
 					BlockTruncate:           queryCfg.Firewall.BlockTruncate,
-				})
+				}
+				if parsedQuery != nil {
+					fwResult = router.CheckFirewallWithTree(parsedQuery, fwCfg)
+				} else {
+					fwResult = router.CheckFirewall(query, fwCfg)
+				}
 				if fwResult.Blocked {
 					slog.Warn("firewall blocked query", "rule", fwResult.Rule, "sql", query)
 					if s.metrics != nil {
@@ -116,7 +130,7 @@ func (s *Server) relayQueries(ctx context.Context, clientConn net.Conn, session 
 			route := session.Route(query)
 			nowInTx := session.InTransaction()
 			target := routeName(route)
-			qtype := s.classifyQuery(query)
+			qtype := s.classifyQueryParsed(query, parsedQuery)
 			var dbOp string
 			if qtype == router.QueryWrite {
 				dbOp = "write"
@@ -160,7 +174,7 @@ func (s *Server) relayQueries(ctx context.Context, clientConn net.Conn, session 
 					trace.WithAttributes(attribute.String("pgmux.route", "writer")),
 				)
 				ct.setFromConn(s.writerAddr, wConn)
-				s.handleWriteQuery(clientConn, wConn, msg, query, session)
+				s.handleWriteQuery(clientConn, wConn, msg, query, session, parsedQuery)
 				ct.clear()
 				execSpan.End()
 
@@ -179,7 +193,7 @@ func (s *Server) relayQueries(ctx context.Context, clientConn net.Conn, session 
 				}
 				// If !acquired && still in transaction → keep using boundWriter
 			} else {
-				if err := s.handleReadQueryTraced(queryCtx, ctx, clientConn, msg, query, session, ct); err != nil {
+				if err := s.handleReadQueryTraced(queryCtx, ctx, clientConn, msg, query, session, ct, parsedQuery); err != nil {
 					querySpan.SetStatus(codes.Error, err.Error())
 					querySpan.End()
 					slog.Error("handle read query", "error", err)

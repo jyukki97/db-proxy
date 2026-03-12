@@ -143,15 +143,29 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 	cfg := s.cfgFn()
 
+	// Pre-parse AST once when AST mode is enabled
+	var parsedQuery *router.ParsedQuery
+	if cfg.Routing.ASTParser {
+		if pq, err := router.NewParsedQuery(req.SQL); err == nil {
+			parsedQuery = pq
+		}
+	}
+
 	// Firewall check
 	if cfg.Firewall.Enabled {
-		fwResult := router.CheckFirewall(req.SQL, router.FirewallConfig{
-			Enabled:                cfg.Firewall.Enabled,
+		var fwResult router.FirewallResult
+		fwCfg := router.FirewallConfig{
+			Enabled:                 cfg.Firewall.Enabled,
 			BlockDeleteWithoutWhere: cfg.Firewall.BlockDeleteWithoutWhere,
 			BlockUpdateWithoutWhere: cfg.Firewall.BlockUpdateWithoutWhere,
 			BlockDropTable:          cfg.Firewall.BlockDropTable,
 			BlockTruncate:           cfg.Firewall.BlockTruncate,
-		})
+		}
+		if parsedQuery != nil {
+			fwResult = router.CheckFirewallWithTree(parsedQuery, fwCfg)
+		} else {
+			fwResult = router.CheckFirewall(req.SQL, fwCfg)
+		}
 		if fwResult.Blocked {
 			if s.met != nil {
 				s.met.FirewallBlocked.WithLabelValues(string(fwResult.Rule)).Inc()
@@ -165,7 +179,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 	// Classify query
 	_, parseSpan := telemetry.Tracer().Start(ctx, "pgmux.parse")
-	qtype := s.classifyQuery(req.SQL)
+	qtype := s.classifyQueryParsed(req.SQL, parsedQuery)
 	target := "reader"
 	if qtype == router.QueryWrite {
 		target = "writer"
@@ -187,9 +201,9 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	var err error
 
 	if qtype == router.QueryWrite {
-		resp, err = s.executeWrite(ctx, req.SQL)
+		resp, err = s.executeWrite(ctx, req.SQL, parsedQuery)
 	} else {
-		resp, err = s.executeRead(ctx, req.SQL)
+		resp, err = s.executeRead(ctx, req.SQL, parsedQuery)
 	}
 
 	elapsed := time.Since(start)
@@ -209,14 +223,14 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-func (s *Server) executeRead(ctx context.Context, sql string) (*QueryResponse, error) {
+func (s *Server) executeRead(ctx context.Context, sql string, pq *router.ParsedQuery) (*QueryResponse, error) {
 	queryCache := s.queryCacheFn()
 	writerPool := s.writerPoolFn()
 
 	// Cache lookup span
 	_, cacheLookupSpan := telemetry.Tracer().Start(ctx, "pgmux.cache.lookup")
 	if queryCache != nil {
-		key := s.cacheKey(sql)
+		key := s.cacheKeyParsed(sql, pq)
 		if cached := queryCache.Get(key); cached != nil {
 			if s.met != nil {
 				s.met.CacheHits.Inc()
@@ -264,9 +278,9 @@ func (s *Server) executeRead(ctx context.Context, sql string) (*QueryResponse, e
 	// Cache store span
 	if queryCache != nil && resp != nil {
 		_, storeSpan := telemetry.Tracer().Start(ctx, "pgmux.cache.store")
-		key := s.cacheKey(sql)
+		key := s.cacheKeyParsed(sql, pq)
 		if data, err := json.Marshal(resp); err == nil {
-			tables := s.extractTables(sql)
+			tables := s.extractTablesParsed(sql, pq)
 			queryCache.Set(key, data, tables)
 			if s.met != nil {
 				s.met.CacheEntries.Set(float64(queryCache.Len()))
@@ -278,7 +292,7 @@ func (s *Server) executeRead(ctx context.Context, sql string) (*QueryResponse, e
 	return resp, nil
 }
 
-func (s *Server) executeWrite(ctx context.Context, sql string) (*QueryResponse, error) {
+func (s *Server) executeWrite(ctx context.Context, sql string, pq *router.ParsedQuery) (*QueryResponse, error) {
 	writerPool := s.writerPoolFn()
 	resp, err := s.executeOnPool(ctx, sql, writerPool)
 	if err != nil {
@@ -288,7 +302,7 @@ func (s *Server) executeWrite(ctx context.Context, sql string) (*QueryResponse, 
 	// Invalidate cache
 	queryCache := s.queryCacheFn()
 	if queryCache != nil {
-		tables := s.extractTables(sql)
+		tables := s.extractTablesParsed(sql, pq)
 		for _, table := range tables {
 			queryCache.InvalidateTable(table)
 			if s.met != nil {
@@ -642,6 +656,13 @@ func (s *Server) classifyQuery(sql string) router.QueryType {
 	return router.Classify(sql)
 }
 
+func (s *Server) classifyQueryParsed(sql string, pq *router.ParsedQuery) router.QueryType {
+	if s.cfgFn().Routing.ASTParser && pq != nil {
+		return router.ClassifyASTWithTree(sql, pq)
+	}
+	return s.classifyQuery(sql)
+}
+
 func (s *Server) cacheKey(sql string) uint64 {
 	if s.cfgFn().Routing.ASTParser {
 		return cache.SemanticCacheKey(sql)
@@ -649,11 +670,25 @@ func (s *Server) cacheKey(sql string) uint64 {
 	return cache.CacheKey(sql)
 }
 
+func (s *Server) cacheKeyParsed(sql string, pq *router.ParsedQuery) uint64 {
+	if s.cfgFn().Routing.ASTParser && pq != nil {
+		return cache.SemanticCacheKeyWithTree(pq.Tree, sql)
+	}
+	return s.cacheKey(sql)
+}
+
 func (s *Server) extractTables(sql string) []string {
 	if s.cfgFn().Routing.ASTParser {
 		return router.ExtractTablesAST(sql)
 	}
 	return router.ExtractTables(sql)
+}
+
+func (s *Server) extractTablesParsed(sql string, pq *router.ParsedQuery) []string {
+	if s.cfgFn().Routing.ASTParser && pq != nil {
+		return router.ExtractTablesASTWithTree(pq)
+	}
+	return s.extractTables(sql)
 }
 
 // truncateSQL returns the first 100 characters of a SQL statement for span attributes.

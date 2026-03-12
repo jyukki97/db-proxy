@@ -49,7 +49,25 @@ func ClassifyAST(query string) QueryType {
 		return Classify(query)
 	}
 
-	// 3. Check each statement
+	return classifyTree(tree)
+}
+
+// ClassifyASTWithTree classifies a query using a pre-parsed AST tree.
+// The raw SQL is needed for hint extraction (lexer-based, separate from parsing).
+func ClassifyASTWithTree(query string, pq *ParsedQuery) QueryType {
+	// 1. Check for routing hint using AST-based lexer
+	if hint := extractHintAST(query); hint != "" {
+		if hint == "writer" {
+			return QueryWrite
+		}
+		return QueryRead
+	}
+
+	return classifyTree(pq.Tree)
+}
+
+// classifyTree classifies a query type from a pre-parsed AST tree.
+func classifyTree(tree *pg_query.ParseResult) QueryType {
 	for _, rawStmt := range tree.GetStmts() {
 		stmt := rawStmt.GetStmt()
 		if stmt == nil {
@@ -129,6 +147,16 @@ func ExtractTablesAST(query string) []string {
 		return ExtractTables(query)
 	}
 
+	return extractTablesFromTree(tree)
+}
+
+// ExtractTablesASTWithTree extracts table names using a pre-parsed AST tree.
+func ExtractTablesASTWithTree(pq *ParsedQuery) []string {
+	return extractTablesFromTree(pq.Tree)
+}
+
+// extractTablesFromTree extracts table names from a pre-parsed AST tree.
+func extractTablesFromTree(tree *pg_query.ParseResult) []string {
 	seen := make(map[string]bool)
 	var tables []string
 

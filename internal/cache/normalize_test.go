@@ -1,6 +1,10 @@
 package cache
 
-import "testing"
+import (
+	"testing"
+
+	pg_query "github.com/pganalyze/pg_query_go/v5"
+)
 
 func TestSemanticCacheKey_WhitespaceInsensitive(t *testing.T) {
 	k1 := SemanticCacheKey("SELECT * FROM users WHERE id = 1")
@@ -78,5 +82,47 @@ func TestSemanticCacheKeyWithParams(t *testing.T) {
 
 	if k3 == k4 {
 		t.Error("different params should produce different keys")
+	}
+}
+
+func TestSemanticCacheKeyWithTree_MatchesSemanticCacheKey(t *testing.T) {
+	queries := []string{
+		"SELECT * FROM users WHERE id = 1",
+		"SELECT  *  FROM  users  WHERE  id  =  1",
+		"select * from users where id = 1",
+		"SELECT * FROM users WHERE id = 999",
+		"SELECT * FROM orders WHERE id = 1",
+		"INSERT INTO users VALUES (1)",
+	}
+
+	for _, query := range queries {
+		t.Run(query, func(t *testing.T) {
+			original := SemanticCacheKey(query)
+			tree, err := pg_query.Parse(query)
+			if err != nil {
+				t.Fatalf("parse failed: %v", err)
+			}
+			withTree := SemanticCacheKeyWithTree(tree, query)
+			if original != withTree {
+				t.Errorf("SemanticCacheKey=%d, SemanticCacheKeyWithTree=%d", original, withTree)
+			}
+		})
+	}
+}
+
+func BenchmarkSemanticCacheKey(b *testing.B) {
+	query := "SELECT * FROM users WHERE id = 1 AND name = 'alice' ORDER BY created_at"
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = SemanticCacheKey(query)
+	}
+}
+
+func BenchmarkSemanticCacheKeyWithTree(b *testing.B) {
+	query := "SELECT * FROM users WHERE id = 1 AND name = 'alice' ORDER BY created_at"
+	tree, _ := pg_query.Parse(query)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = SemanticCacheKeyWithTree(tree, query)
 	}
 }
