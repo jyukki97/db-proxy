@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/tls"
@@ -503,6 +504,14 @@ func (s *Server) relayQueries(ctx context.Context, clientConn net.Conn, session 
 	var extRoute router.Route
 	var extTxStart, extTxEnd bool
 
+	// Multiplexing mode: synthesizer for Prepared Statement → Simple Query conversion
+	multiplexMode := s.getConfig().Pool.PreparedStatementMode == "multiplex"
+	var synth *Synthesizer
+	var muxBindDetail *protocol.BindMessageDetail // current Bind for synthesis
+	if multiplexMode {
+		synth = NewSynthesizer()
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -657,41 +666,119 @@ func (s *Server) relayQueries(ctx context.Context, clientConn net.Conn, session 
 		// --- Extended Query Protocol ---
 		switch msg.Type {
 		case protocol.MsgParse:
-			stmtName, query := protocol.ParseParseMessage(msg.Payload)
-			route := session.RegisterStatement(stmtName, query)
-			slog.Debug("parse registered", "stmt", stmtName, "sql", query, "route", routeName(route))
+			if multiplexMode {
+				stmtName, query, paramOIDs, err := protocol.ParseParseMessageFull(msg.Payload)
+				if err != nil {
+					slog.Warn("parse message full failed, falling back", "error", err)
+					stmtName, query = protocol.ParseParseMessage(msg.Payload)
+				}
+				route := session.RegisterStatement(stmtName, query)
+				slog.Debug("parse registered (multiplex)", "stmt", stmtName, "sql", query, "route", routeName(route))
+				synth.RegisterStatement(stmtName, query, paramOIDs)
 
-			// Track transaction lifecycle in Extended Query
-			upper := strings.ToUpper(strings.TrimSpace(query))
-			if strings.HasPrefix(upper, "BEGIN") || strings.HasPrefix(upper, "START TRANSACTION") {
-				extTxStart = true
-			}
-			if strings.HasPrefix(upper, "COMMIT") || strings.HasPrefix(upper, "ROLLBACK") || strings.HasPrefix(upper, "END") {
-				extTxEnd = true
-			}
+				upper := strings.ToUpper(strings.TrimSpace(query))
+				if strings.HasPrefix(upper, "BEGIN") || strings.HasPrefix(upper, "START TRANSACTION") {
+					extTxStart = true
+				}
+				if strings.HasPrefix(upper, "COMMIT") || strings.HasPrefix(upper, "ROLLBACK") || strings.HasPrefix(upper, "END") {
+					extTxEnd = true
+				}
 
-			if session.InTransaction() || boundWriter != nil || route == router.RouteWriter {
-				extRoute = router.RouteWriter
+				if session.InTransaction() || boundWriter != nil || route == router.RouteWriter {
+					extRoute = router.RouteWriter
+				} else {
+					extRoute = route
+				}
+				// In multiplex mode, we don't buffer Parse — we'll synthesize later
+				// But we need to send ParseComplete to the client
+				if err := protocol.WriteMessage(clientConn, '1', nil); err != nil {
+					slog.Error("send ParseComplete", "error", err)
+					return
+				}
 			} else {
-				extRoute = route
+				stmtName, query := protocol.ParseParseMessage(msg.Payload)
+				route := session.RegisterStatement(stmtName, query)
+				slog.Debug("parse registered", "stmt", stmtName, "sql", query, "route", routeName(route))
+
+				upper := strings.ToUpper(strings.TrimSpace(query))
+				if strings.HasPrefix(upper, "BEGIN") || strings.HasPrefix(upper, "START TRANSACTION") {
+					extTxStart = true
+				}
+				if strings.HasPrefix(upper, "COMMIT") || strings.HasPrefix(upper, "ROLLBACK") || strings.HasPrefix(upper, "END") {
+					extTxEnd = true
+				}
+
+				if session.InTransaction() || boundWriter != nil || route == router.RouteWriter {
+					extRoute = router.RouteWriter
+				} else {
+					extRoute = route
+				}
+				extBuf = append(extBuf, msg)
 			}
-			extBuf = append(extBuf, msg)
 
 		case protocol.MsgBind:
-			_, stmtName := protocol.ParseBindMessage(msg.Payload)
-			route := session.StatementRoute(stmtName)
-			// If any statement in the batch is a writer, the whole batch goes to writer
-			if route == router.RouteWriter {
-				extRoute = router.RouteWriter
+			if multiplexMode {
+				detail, err := protocol.ParseBindMessageFull(msg.Payload)
+				if err != nil {
+					slog.Error("parse bind message full failed", "error", err)
+					s.sendError(clientConn, fmt.Sprintf("invalid bind message: %v", err))
+					return
+				}
+				route := session.StatementRoute(detail.StatementName)
+				if route == router.RouteWriter {
+					extRoute = router.RouteWriter
+				}
+				muxBindDetail = detail
+				// Send BindComplete to client
+				if err := protocol.WriteMessage(clientConn, '2', nil); err != nil {
+					slog.Error("send BindComplete", "error", err)
+					return
+				}
+			} else {
+				_, stmtName := protocol.ParseBindMessage(msg.Payload)
+				route := session.StatementRoute(stmtName)
+				if route == router.RouteWriter {
+					extRoute = router.RouteWriter
+				}
+				extBuf = append(extBuf, msg)
 			}
-			extBuf = append(extBuf, msg)
 
 		case protocol.MsgClose:
 			closeType, name := protocol.ParseCloseMessage(msg.Payload)
 			if closeType == 'S' {
 				session.CloseStatement(name)
+				if multiplexMode {
+					synth.CloseStatement(name)
+				}
 			}
-			extBuf = append(extBuf, msg)
+			if multiplexMode {
+				// Send CloseComplete to client
+				if err := protocol.WriteMessage(clientConn, '3', nil); err != nil {
+					slog.Error("send CloseComplete", "error", err)
+					return
+				}
+			} else {
+				extBuf = append(extBuf, msg)
+			}
+
+		case protocol.MsgDescribe:
+			if multiplexMode {
+				// In multiplex mode, handle Describe by forwarding to backend
+				if err := s.handleMultiplexDescribe(ctx, clientConn, msg, synth, boundWriter); err != nil {
+					slog.Error("multiplex describe", "error", err)
+					return
+				}
+			} else {
+				extBuf = append(extBuf, msg)
+			}
+
+		case protocol.MsgExecute:
+			if multiplexMode {
+				// In multiplex mode, Execute is handled in Sync
+				// (the synthesized query already replaces Parse+Bind+Execute)
+			} else {
+				extBuf = append(extBuf, msg)
+			}
 
 		case protocol.MsgSync:
 			start := time.Now()
@@ -705,8 +792,42 @@ func (s *Server) relayQueries(ctx context.Context, clientConn net.Conn, session 
 				),
 			)
 
-			if extRoute == router.RouteReader && !session.InTransaction() && boundWriter == nil {
-				// Reader path
+			if multiplexMode && muxBindDetail != nil {
+				// Multiplex mode: synthesize Simple Query from Parse+Bind
+				synthesized, synthErr := synth.Synthesize(
+					muxBindDetail.StatementName,
+					muxBindDetail.Parameters,
+					muxBindDetail.FormatCodes,
+				)
+				if synthErr != nil {
+					extSpan.SetStatus(codes.Error, synthErr.Error())
+					extSpan.End()
+					slog.Error("synthesize query failed", "error", synthErr)
+					s.sendError(clientConn, fmt.Sprintf("query synthesis failed: %v", synthErr))
+					// Send ReadyForQuery to keep client in sync
+					s.sendReadyForQuery(clientConn, session.InTransaction())
+					extBuf = extBuf[:0]
+					extRoute = router.RouteReader
+					extTxStart, extTxEnd = false, false
+					muxBindDetail = nil
+					continue
+				}
+
+				slog.Debug("synthesized query", "sql", synthesized, "route", target)
+				extSpan.SetAttributes(attribute.String("db.statement", truncateStr(synthesized, 100)))
+
+				if err := s.executeSynthesizedQuery(extCtx, clientConn, synthesized, extRoute, session, &boundWriter, extTxStart, extTxEnd); err != nil {
+					extSpan.SetStatus(codes.Error, err.Error())
+					extSpan.End()
+					slog.Error("execute synthesized query", "error", err)
+					return
+				}
+			} else if multiplexMode && muxBindDetail == nil {
+				// Multiplex mode but no Bind (e.g., Parse-only or empty batch)
+				// Just send ReadyForQuery
+				s.sendReadyForQuery(clientConn, session.InTransaction())
+			} else if extRoute == router.RouteReader && !session.InTransaction() && boundWriter == nil {
+				// Reader path (proxy mode)
 				readerAddr := s.balancer.Next()
 				if err := s.handleExtendedRead(extCtx, clientConn, extBuf, msg, readerAddr); err != nil {
 					extSpan.SetStatus(codes.Error, err.Error())
@@ -715,7 +836,7 @@ func (s *Server) relayQueries(ctx context.Context, clientConn net.Conn, session 
 					return
 				}
 			} else {
-				// Writer path — acquire from pool or use bound connection
+				// Writer path (proxy mode) — acquire from pool or use bound connection
 				_, acquireSpan := telemetry.Tracer().Start(extCtx, "pgmux.pool.acquire",
 					trace.WithAttributes(attribute.String("pgmux.route", "writer")),
 				)
@@ -804,10 +925,13 @@ func (s *Server) relayQueries(ctx context.Context, clientConn net.Conn, session 
 			extBuf = extBuf[:0]
 			extRoute = router.RouteReader
 			extTxStart, extTxEnd = false, false
+			muxBindDetail = nil
 
 		default:
-			// Describe(D), Execute(E), etc. — buffer them
-			extBuf = append(extBuf, msg)
+			// Other messages — buffer them (proxy mode only)
+			if !multiplexMode {
+				extBuf = append(extBuf, msg)
+			}
 		}
 	}
 }
@@ -1393,6 +1517,229 @@ func (s *Server) relayAndCollect(clientConn, backendConn net.Conn) ([]byte, erro
 			return buf, nil
 		}
 	}
+}
+
+// executeSynthesizedQuery executes a synthesized Simple Query on the appropriate backend.
+func (s *Server) executeSynthesizedQuery(ctx context.Context, clientConn net.Conn, query string, route router.Route, session *router.Session, boundWriter **pool.Conn, extTxStart, extTxEnd bool) error {
+	// Build Simple Query message
+	queryPayload := append([]byte(query), 0)
+
+	if route == router.RouteReader && !session.InTransaction() && *boundWriter == nil {
+		// Reader path
+		readerAddr := s.balancer.Next()
+		return s.handleSynthesizedRead(ctx, clientConn, queryPayload, readerAddr)
+	}
+
+	// Writer path
+	wConn, acquired, err := s.acquireWriterConn(ctx, *boundWriter)
+	if err != nil {
+		s.sendError(clientConn, "cannot acquire backend connection")
+		return fmt.Errorf("acquire writer for synthesized query: %w", err)
+	}
+
+	if err := protocol.WriteMessage(wConn, protocol.MsgQuery, queryPayload); err != nil {
+		if acquired {
+			s.writerPool.Discard(wConn)
+		}
+		return fmt.Errorf("send synthesized query: %w", err)
+	}
+
+	if err := s.relayUntilReady(clientConn, wConn); err != nil {
+		if acquired {
+			s.writerPool.Discard(wConn)
+		} else if *boundWriter != nil {
+			s.writerPool.Discard(*boundWriter)
+			*boundWriter = nil
+		}
+		return fmt.Errorf("relay synthesized response: %w", err)
+	}
+
+	// Update transaction state
+	if extTxStart {
+		session.SetInTransaction(true)
+	}
+	if extTxEnd {
+		session.SetInTransaction(false)
+	}
+
+	switch {
+	case extTxStart && !extTxEnd:
+		*boundWriter = wConn
+	case extTxEnd:
+		*boundWriter = nil
+		s.resetAndReleaseWriter(wConn)
+	case acquired:
+		s.resetAndReleaseWriter(wConn)
+	}
+	return nil
+}
+
+// handleSynthesizedRead sends a synthesized Simple Query to a reader.
+func (s *Server) handleSynthesizedRead(ctx context.Context, clientConn net.Conn, queryPayload []byte, readerAddr string) error {
+	fallbackToWriter := func() error {
+		if s.metrics != nil {
+			s.metrics.ReaderFallback.Inc()
+		}
+		wConn, err := s.writerPool.Acquire(ctx)
+		if err != nil {
+			s.sendError(clientConn, "no available backend connections")
+			return fmt.Errorf("acquire writer for synthesized fallback: %w", err)
+		}
+		if err := protocol.WriteMessage(wConn, protocol.MsgQuery, queryPayload); err != nil {
+			s.writerPool.Discard(wConn)
+			return fmt.Errorf("send synthesized to writer: %w", err)
+		}
+		if err := s.relayUntilReady(clientConn, wConn); err != nil {
+			s.writerPool.Discard(wConn)
+			return err
+		}
+		s.resetAndReleaseWriter(wConn)
+		return nil
+	}
+
+	if readerAddr == "" {
+		return fallbackToWriter()
+	}
+
+	rPool, ok := s.getReaderPool(readerAddr)
+	if !ok {
+		return fallbackToWriter()
+	}
+
+	rConn, err := rPool.Acquire(ctx)
+	if err != nil {
+		return fallbackToWriter()
+	}
+
+	if err := protocol.WriteMessage(rConn, protocol.MsgQuery, queryPayload); err != nil {
+		rPool.Discard(rConn)
+		return fallbackToWriter()
+	}
+
+	if err := s.relayUntilReady(clientConn, rConn); err != nil {
+		rPool.Discard(rConn)
+		return fmt.Errorf("relay reader synthesized response: %w", err)
+	}
+	rPool.Release(rConn)
+	return nil
+}
+
+// handleMultiplexDescribe handles Describe messages in multiplex mode.
+// It forwards a temporary Parse → Describe → Close to the backend and relays results.
+func (s *Server) handleMultiplexDescribe(ctx context.Context, clientConn net.Conn, msg *protocol.Message, synth *Synthesizer, boundWriter *pool.Conn) error {
+	if len(msg.Payload) < 2 {
+		s.sendError(clientConn, "invalid describe message")
+		return nil
+	}
+	descType := msg.Payload[0]
+	nameEnd := bytes.IndexByte(msg.Payload[1:], 0)
+	if nameEnd < 0 {
+		s.sendError(clientConn, "invalid describe message")
+		return nil
+	}
+	name := string(msg.Payload[1 : 1+nameEnd])
+
+	if descType == 'P' {
+		// Portal describe — not supported in multiplex mode
+		s.sendError(clientConn, "portal describe not supported in multiplex mode")
+		return nil
+	}
+
+	// Statement describe — look up the registered statement
+	stmt := synth.GetStatement(name)
+	if stmt == nil {
+		s.sendError(clientConn, fmt.Sprintf("unknown statement: %q", name))
+		return nil
+	}
+
+	// Forward to backend: Parse → Describe → Close → Sync, then relay response
+	wConn, err := s.writerPool.Acquire(ctx)
+	if err != nil {
+		s.sendError(clientConn, "cannot acquire backend connection for describe")
+		return nil
+	}
+
+	// Use a unique temporary statement name to avoid conflicts
+	tmpName := "__pgmux_desc_tmp__"
+
+	// Build Parse message
+	var parseBuf []byte
+	parseBuf = append(parseBuf, []byte(tmpName)...)
+	parseBuf = append(parseBuf, 0)
+	parseBuf = append(parseBuf, []byte(stmt.Query)...)
+	parseBuf = append(parseBuf, 0)
+	parseBuf = binary.BigEndian.AppendUint16(parseBuf, 0) // no param type hints
+
+	// Build Describe message
+	descBuf := []byte{'S'}
+	descBuf = append(descBuf, []byte(tmpName)...)
+	descBuf = append(descBuf, 0)
+
+	// Build Close message
+	closeBuf := []byte{'S'}
+	closeBuf = append(closeBuf, []byte(tmpName)...)
+	closeBuf = append(closeBuf, 0)
+
+	// Send Parse → Describe → Close → Sync
+	if err := protocol.WriteMessage(wConn, protocol.MsgParse, parseBuf); err != nil {
+		s.writerPool.Discard(wConn)
+		return fmt.Errorf("send describe parse: %w", err)
+	}
+	if err := protocol.WriteMessage(wConn, protocol.MsgDescribe, descBuf); err != nil {
+		s.writerPool.Discard(wConn)
+		return fmt.Errorf("send describe: %w", err)
+	}
+	if err := protocol.WriteMessage(wConn, protocol.MsgClose, closeBuf); err != nil {
+		s.writerPool.Discard(wConn)
+		return fmt.Errorf("send describe close: %w", err)
+	}
+	if err := protocol.WriteMessage(wConn, protocol.MsgSync, nil); err != nil {
+		s.writerPool.Discard(wConn)
+		return fmt.Errorf("send describe sync: %w", err)
+	}
+
+	// Relay responses until ReadyForQuery, skipping ParseComplete and CloseComplete
+	for {
+		resp, err := protocol.ReadMessage(wConn)
+		if err != nil {
+			s.writerPool.Discard(wConn)
+			return fmt.Errorf("read describe response: %w", err)
+		}
+
+		switch resp.Type {
+		case '1': // ParseComplete — skip (client already got ours)
+			continue
+		case '3': // CloseComplete — skip
+			continue
+		case protocol.MsgReadyForQuery:
+			// Don't forward ReadyForQuery — caller handles that
+			s.resetAndReleaseWriter(wConn)
+			return nil
+		default:
+			// Forward ParameterDescription, RowDescription, ErrorResponse, etc.
+			if err := protocol.WriteMessage(clientConn, resp.Type, resp.Payload); err != nil {
+				s.writerPool.Discard(wConn)
+				return fmt.Errorf("forward describe response: %w", err)
+			}
+		}
+	}
+}
+
+// sendReadyForQuery sends a ReadyForQuery ('Z') message to the client.
+func (s *Server) sendReadyForQuery(conn net.Conn, inTransaction bool) {
+	var status byte = 'I' // idle
+	if inTransaction {
+		status = 'T' // in transaction
+	}
+	protocol.WriteMessage(conn, protocol.MsgReadyForQuery, []byte{status})
+}
+
+// truncateStr truncates a string to maxLen characters.
+func truncateStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 func (s *Server) sendError(conn net.Conn, msg string) {

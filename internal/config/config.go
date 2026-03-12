@@ -124,12 +124,13 @@ type DBConfig struct {
 }
 
 type PoolConfig struct {
-	MinConnections    int           `yaml:"min_connections"`
-	MaxConnections    int           `yaml:"max_connections"`
-	IdleTimeout       time.Duration `yaml:"idle_timeout"`
-	MaxLifetime       time.Duration `yaml:"max_lifetime"`
-	ConnectionTimeout time.Duration `yaml:"connection_timeout"`
-	ResetQuery        string        `yaml:"reset_query"`
+	MinConnections         int           `yaml:"min_connections"`
+	MaxConnections         int           `yaml:"max_connections"`
+	IdleTimeout            time.Duration `yaml:"idle_timeout"`
+	MaxLifetime            time.Duration `yaml:"max_lifetime"`
+	ConnectionTimeout      time.Duration `yaml:"connection_timeout"`
+	ResetQuery             string        `yaml:"reset_query"`
+	PreparedStatementMode  string        `yaml:"prepared_statement_mode"` // "proxy" (default) or "multiplex"
 }
 
 type RoutingConfig struct {
@@ -205,6 +206,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Pool.ResetQuery == "" {
 		c.Pool.ResetQuery = "DISCARD ALL"
+	}
+	if c.Pool.PreparedStatementMode == "" {
+		c.Pool.PreparedStatementMode = "proxy"
 	}
 	if c.Cache.Invalidation.Mode == "" {
 		c.Cache.Invalidation.Mode = "local"
@@ -305,6 +309,9 @@ func (c *Config) validate() error {
 	}
 	if c.Pool.MinConnections > c.Pool.MaxConnections {
 		return fmt.Errorf("pool.min_connections (%d) must be <= pool.max_connections (%d)", c.Pool.MinConnections, c.Pool.MaxConnections)
+	}
+	if c.Pool.PreparedStatementMode != "proxy" && c.Pool.PreparedStatementMode != "multiplex" {
+		return fmt.Errorf("pool.prepared_statement_mode must be \"proxy\" or \"multiplex\", got %q", c.Pool.PreparedStatementMode)
 	}
 	return nil
 }

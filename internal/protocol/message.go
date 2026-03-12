@@ -197,6 +197,39 @@ func ParseParseMessage(payload []byte) (stmtName, query string) {
 	return stmtName, query
 }
 
+// ParseParseMessageFull extracts statement name, query, and parameter OIDs from a Parse message.
+func ParseParseMessageFull(payload []byte) (stmtName, query string, paramOIDs []uint32, err error) {
+	nameEnd := indexOf(payload, 0)
+	if nameEnd < 0 {
+		return "", "", nil, fmt.Errorf("missing statement name terminator")
+	}
+	stmtName = string(payload[:nameEnd])
+
+	rest := payload[nameEnd+1:]
+	queryEnd := indexOf(rest, 0)
+	if queryEnd < 0 {
+		return stmtName, "", nil, fmt.Errorf("missing query terminator")
+	}
+	query = string(rest[:queryEnd])
+	rest = rest[queryEnd+1:]
+
+	if len(rest) < 2 {
+		return stmtName, query, nil, nil // no param type info
+	}
+	numParams := int(binary.BigEndian.Uint16(rest[:2]))
+	rest = rest[2:]
+
+	paramOIDs = make([]uint32, numParams)
+	for i := 0; i < numParams; i++ {
+		if len(rest) < 4 {
+			return stmtName, query, paramOIDs[:i], fmt.Errorf("truncated param OID at index %d", i)
+		}
+		paramOIDs[i] = binary.BigEndian.Uint32(rest[:4])
+		rest = rest[4:]
+	}
+	return stmtName, query, paramOIDs, nil
+}
+
 // ParseBindMessage extracts the destination portal and source statement name from a Bind ('B') message.
 // Bind payload format: portal_name (string\0) + statement_name (string\0) + ...
 func ParseBindMessage(payload []byte) (portal, stmtName string) {
@@ -213,6 +246,97 @@ func ParseBindMessage(payload []byte) (portal, stmtName string) {
 	}
 	stmtName = string(rest[:nameEnd])
 	return portal, stmtName
+}
+
+// BindMessageDetail holds the fully parsed contents of a Bind message.
+type BindMessageDetail struct {
+	Portal           string
+	StatementName    string
+	FormatCodes      []int16  // parameter format codes (0=text, 1=binary)
+	Parameters       [][]byte // parameter values (nil element = NULL)
+	ResultFormatCodes []int16 // result column format codes
+}
+
+// ParseBindMessageFull extracts all fields from a Bind ('B') message payload.
+// Format: portal\0 + stmt\0 + int16(numFmtCodes) + int16[](fmtCodes) +
+//
+//	int16(numParams) + (int32(len) + bytes)[] + int16(numResultFmtCodes) + int16[](resultFmtCodes)
+func ParseBindMessageFull(payload []byte) (*BindMessageDetail, error) {
+	d := &BindMessageDetail{}
+	pos := 0
+
+	// portal name
+	end := indexOf(payload[pos:], 0)
+	if end < 0 {
+		return nil, fmt.Errorf("missing portal name terminator")
+	}
+	d.Portal = string(payload[pos : pos+end])
+	pos += end + 1
+
+	// statement name
+	end = indexOf(payload[pos:], 0)
+	if end < 0 {
+		return nil, fmt.Errorf("missing statement name terminator")
+	}
+	d.StatementName = string(payload[pos : pos+end])
+	pos += end + 1
+
+	// parameter format codes
+	if pos+2 > len(payload) {
+		return nil, fmt.Errorf("truncated format code count")
+	}
+	numFmtCodes := int(binary.BigEndian.Uint16(payload[pos : pos+2]))
+	pos += 2
+	d.FormatCodes = make([]int16, numFmtCodes)
+	for i := 0; i < numFmtCodes; i++ {
+		if pos+2 > len(payload) {
+			return nil, fmt.Errorf("truncated format code at index %d", i)
+		}
+		d.FormatCodes[i] = int16(binary.BigEndian.Uint16(payload[pos : pos+2]))
+		pos += 2
+	}
+
+	// parameters
+	if pos+2 > len(payload) {
+		return nil, fmt.Errorf("truncated parameter count")
+	}
+	numParams := int(binary.BigEndian.Uint16(payload[pos : pos+2]))
+	pos += 2
+	d.Parameters = make([][]byte, numParams)
+	for i := 0; i < numParams; i++ {
+		if pos+4 > len(payload) {
+			return nil, fmt.Errorf("truncated parameter length at index %d", i)
+		}
+		paramLen := int32(binary.BigEndian.Uint32(payload[pos : pos+4]))
+		pos += 4
+		if paramLen == -1 {
+			d.Parameters[i] = nil // NULL
+			continue
+		}
+		if paramLen < 0 || pos+int(paramLen) > len(payload) {
+			return nil, fmt.Errorf("invalid parameter length %d at index %d", paramLen, i)
+		}
+		d.Parameters[i] = make([]byte, paramLen)
+		copy(d.Parameters[i], payload[pos:pos+int(paramLen)])
+		pos += int(paramLen)
+	}
+
+	// result format codes
+	if pos+2 > len(payload) {
+		return nil, fmt.Errorf("truncated result format code count")
+	}
+	numResultFmtCodes := int(binary.BigEndian.Uint16(payload[pos : pos+2]))
+	pos += 2
+	d.ResultFormatCodes = make([]int16, numResultFmtCodes)
+	for i := 0; i < numResultFmtCodes; i++ {
+		if pos+2 > len(payload) {
+			return nil, fmt.Errorf("truncated result format code at index %d", i)
+		}
+		d.ResultFormatCodes[i] = int16(binary.BigEndian.Uint16(payload[pos : pos+2]))
+		pos += 2
+	}
+
+	return d, nil
 }
 
 // ParseCloseMessage extracts the type ('S' for statement, 'P' for portal) and name from a Close ('C') message.

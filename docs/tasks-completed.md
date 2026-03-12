@@ -457,3 +457,14 @@
 | T18-2 | FileWatcher 구현 (부모 디렉토리 감시, 디바운싱, symlink swap 지원) | #94 / #96 |
 | T18-3 | main.go 통합 (기존 reloadConfig() 재사용) | #94 / #96 |
 | T18-4 | 단위 테스트 4건 (수정 감지, 디바운싱, symlink swap, Stop 안전성) | #94 / #96 |
+
+### Phase 19: Prepared Statement Multiplexing PoC
+
+| Task | 작업 | 이슈/PR |
+|------|------|---------|
+| T19-1 | Bind 메시지 파서 확장 (ParseBindMessageFull: 파라미터, 포맷코드, 결과포맷코드 추출) | #105 / #106 |
+| T19-2 | PG 타입별 SQL 리터럴 직렬화 (literal.go: 20+ 타입 이스케이핑, NULL byte 방어) | #105 / #106 |
+| T19-3 | Query Synthesizer 구현 (Parse+Bind → Simple Query 합성, 문자열 리터럴 내 플레이스홀더 보호) | #105 / #106 |
+| T19-4 | Describe 메시지 프록시 처리 (임시 Parse→Describe→Close 릴레이) | #105 / #106 |
+| T19-5 | Multiplexing 모드 설정 및 server.go 통합 (prepared_statement_mode: multiplex) | #105 / #106 |
+| T19-6 | SQL Injection 방어 테스트 매트릭스 (DROP TABLE, 플레이스홀더, NULL byte, 중첩 이스케이핑 등) | #105 / #106 |
