@@ -54,22 +54,24 @@ type Server struct {
 	readerPoolsFn func() map[string]*pool.Pool
 	balancerFn    func() *router.RoundRobin
 	queryCacheFn  func() *cache.Cache
-	met           *metrics.Metrics
-	rateLimiterFn func() *resilience.RateLimiter
+	met            *metrics.Metrics
+	rateLimiterFn  func() *resilience.RateLimiter
+	invalidatorFn  func() *cache.Invalidator
 }
 
 // New creates a new Data API server.
 // Pool, balancer, cache, and rate limiter parameters are getter functions so
 // that Data API always accesses the latest objects even after a hot-reload.
-func New(cfgFn func() *config.Config, writerPoolFn func() *pool.Pool, readerPoolsFn func() map[string]*pool.Pool, balancerFn func() *router.RoundRobin, queryCacheFn func() *cache.Cache, met *metrics.Metrics, rateLimiterFn func() *resilience.RateLimiter) *Server {
+func New(cfgFn func() *config.Config, writerPoolFn func() *pool.Pool, readerPoolsFn func() map[string]*pool.Pool, balancerFn func() *router.RoundRobin, queryCacheFn func() *cache.Cache, met *metrics.Metrics, rateLimiterFn func() *resilience.RateLimiter, invalidatorFn func() *cache.Invalidator) *Server {
 	return &Server{
-		cfgFn:         cfgFn,
-		writerPoolFn:  writerPoolFn,
-		readerPoolsFn: readerPoolsFn,
-		balancerFn:    balancerFn,
-		queryCacheFn:  queryCacheFn,
-		met:           met,
-		rateLimiterFn: rateLimiterFn,
+		cfgFn:          cfgFn,
+		writerPoolFn:   writerPoolFn,
+		readerPoolsFn:  readerPoolsFn,
+		balancerFn:     balancerFn,
+		queryCacheFn:   queryCacheFn,
+		met:            met,
+		rateLimiterFn:  rateLimiterFn,
+		invalidatorFn:  invalidatorFn,
 	}
 }
 
@@ -292,6 +294,12 @@ func (s *Server) executeWrite(ctx context.Context, sql string) (*QueryResponse, 
 			if s.met != nil {
 				s.met.CacheInvalidations.Inc()
 				s.met.CacheEntries.Set(float64(queryCache.Len()))
+			}
+		}
+		// Broadcast invalidation to other proxy instances
+		if s.invalidatorFn != nil {
+			if inv := s.invalidatorFn(); inv != nil && len(tables) > 0 {
+				inv.Publish(context.Background(), tables)
 			}
 		}
 	}

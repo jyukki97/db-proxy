@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jyukki97/pgmux/internal/admin"
+	"github.com/jyukki97/pgmux/internal/cache"
 	"github.com/jyukki97/pgmux/internal/config"
 	"github.com/jyukki97/pgmux/internal/dataapi"
 	"github.com/jyukki97/pgmux/internal/proxy"
@@ -90,7 +91,7 @@ func run() error {
 
 	// Start Data API server
 	if cfg.DataAPI.Enabled {
-		apiSrv := dataapi.New(srv.Cfg, srv.WriterPool, srv.ReaderPools, srv.Balancer, srv.Cache, srv.ProxyMetrics(), srv.RateLimiter)
+		apiSrv := dataapi.New(srv.Cfg, srv.WriterPool, srv.ReaderPools, srv.Balancer, srv.Cache, srv.ProxyMetrics(), srv.RateLimiter, func() *cache.Invalidator { return srv.Invalidator() })
 		go func() {
 			if err := apiSrv.ListenAndServe(cfg.DataAPI.Listen); err != nil && err != http.ErrServerClosed {
 				slog.Error("data api server error", "error", err)
