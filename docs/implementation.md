@@ -577,6 +577,8 @@ admin:
         role: "admin"
     ip_allowlist:
       - "10.0.0.0/8"
+    trusted_proxies:
+      - "10.0.0.1"
 ```
 
 #### Stats 응답 예시

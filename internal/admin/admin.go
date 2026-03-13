@@ -90,7 +90,7 @@ func (s *Server) withAuth(next http.HandlerFunc, requireAdmin bool) http.Handler
 
 		// IP allowlist check
 		if len(authCfg.IPAllowlist) > 0 {
-			clientIP := extractClientIP(r)
+			clientIP := extractClientIP(r, authCfg.TrustedProxies)
 			if !isIPAllowed(clientIP, authCfg.IPAllowlist) {
 				writeJSONError(w, http.StatusForbidden, "ip not allowed")
 				return
@@ -135,18 +135,44 @@ func extractBearerToken(r *http.Request) string {
 	return ""
 }
 
-func extractClientIP(r *http.Request) string {
-	// Check X-Forwarded-For first (first IP is the original client)
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		parts := strings.SplitN(xff, ",", 2)
-		return strings.TrimSpace(parts[0])
+func extractClientIP(r *http.Request, trustedProxies []string) string {
+	// Extract RemoteAddr (host part)
+	remoteIP := r.RemoteAddr
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		remoteIP = host
 	}
-	// Fall back to RemoteAddr (host:port)
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
+
+	// Only trust X-Forwarded-For if RemoteAddr is in trustedProxies.
+	// If trustedProxies is empty, NEVER trust XFF (secure default).
+	if len(trustedProxies) > 0 && isTrustedProxy(remoteIP, trustedProxies) {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.SplitN(xff, ",", 2)
+			return strings.TrimSpace(parts[0])
+		}
 	}
-	return host
+
+	return remoteIP
+}
+
+// isTrustedProxy checks whether the given IP is in the trusted proxy list.
+func isTrustedProxy(ip string, trustedProxies []string) bool {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	for _, entry := range trustedProxies {
+		_, cidr, err := net.ParseCIDR(entry)
+		if err == nil {
+			if cidr.Contains(parsed) {
+				return true
+			}
+			continue
+		}
+		if net.ParseIP(entry) != nil && entry == ip {
+			return true
+		}
+	}
+	return false
 }
 
 func isIPAllowed(clientIP string, allowlist []string) bool {
@@ -418,9 +444,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			Enabled bool `json:"enabled"`
 			Listen  string `json:"listen"`
 			Auth    struct {
-				Enabled     bool              `json:"enabled"`
-				APIKeys     []safeAdminAPIKey `json:"api_keys,omitempty"`
-				IPAllowlist []string          `json:"ip_allowlist,omitempty"`
+				Enabled        bool              `json:"enabled"`
+				APIKeys        []safeAdminAPIKey `json:"api_keys,omitempty"`
+				IPAllowlist    []string          `json:"ip_allowlist,omitempty"`
+				TrustedProxies []string          `json:"trusted_proxies,omitempty"`
 			} `json:"auth"`
 		} `json:"admin"`
 		Backend struct {
@@ -449,6 +476,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	safe.Admin.Listen = cfg.Admin.Listen
 	safe.Admin.Auth.Enabled = cfg.Admin.Auth.Enabled
 	safe.Admin.Auth.IPAllowlist = cfg.Admin.Auth.IPAllowlist
+	safe.Admin.Auth.TrustedProxies = cfg.Admin.Auth.TrustedProxies
 	for _, k := range cfg.Admin.Auth.APIKeys {
 		safe.Admin.Auth.APIKeys = append(safe.Admin.Auth.APIKeys, safeAdminAPIKey{
 			Key:  "********",

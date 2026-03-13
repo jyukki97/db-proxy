@@ -255,6 +255,9 @@ admin:
     ip_allowlist:                  # 선택사항 — 허용 IP/CIDR (비어있으면 모든 IP 허용)
       - "10.0.0.0/8"
       - "172.16.0.0/12"
+    trusted_proxies:               # 선택사항 — X-Forwarded-For를 신뢰할 리버스 프록시 IP/CIDR (비어있으면 XFF 무시)
+      - "10.0.0.1"
+      - "172.16.0.0/12"
 
 data_api:
   enabled: false

@@ -921,14 +921,15 @@ func TestAuth_IPAllowlist_Denied(t *testing.T) {
 	}
 }
 
-func TestAuth_IPAllowlist_XForwardedFor(t *testing.T) {
+func TestAuth_IPAllowlist_XForwardedFor_WithTrustedProxy(t *testing.T) {
 	cfg := testConfig()
 	cfg.Admin.Auth = config.AdminAuthConfig{
 		Enabled: true,
 		APIKeys: []config.AdminAPIKey{
 			{Key: "key", Role: "admin"},
 		},
-		IPAllowlist: []string{"192.168.1.100"},
+		IPAllowlist:    []string{"192.168.1.100"},
+		TrustedProxies: []string{"192.0.2.1"},
 	}
 
 	srv := New(
@@ -941,29 +942,102 @@ func TestAuth_IPAllowlist_XForwardedFor(t *testing.T) {
 		nil, nil, nil, nil,
 	)
 
-	// Use httptest.NewRecorder to control RemoteAddr
 	handler := srv.HTTPServer().Handler
 
-	// X-Forwarded-For with allowed IP
+	// X-Forwarded-For with allowed IP, sent from trusted proxy
 	req := httptest.NewRequest(http.MethodGet, "/admin/stats", nil)
+	req.RemoteAddr = "192.0.2.1:12345"
 	req.Header.Set("Authorization", "Bearer key")
 	req.Header.Set("X-Forwarded-For", "192.168.1.100, 10.0.0.1")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Errorf("XFF allowed: status = %d, want 200", w.Code)
+		t.Errorf("XFF from trusted proxy allowed: status = %d, want 200", w.Code)
 	}
 
-	// X-Forwarded-For with denied IP
+	// X-Forwarded-For with denied IP, sent from trusted proxy
 	req2 := httptest.NewRequest(http.MethodGet, "/admin/stats", nil)
+	req2.RemoteAddr = "192.0.2.1:12345"
 	req2.Header.Set("Authorization", "Bearer key")
 	req2.Header.Set("X-Forwarded-For", "10.0.0.1")
 	w2 := httptest.NewRecorder()
 	handler.ServeHTTP(w2, req2)
 
 	if w2.Code != http.StatusForbidden {
-		t.Errorf("XFF denied: status = %d, want 403", w2.Code)
+		t.Errorf("XFF from trusted proxy denied: status = %d, want 403", w2.Code)
+	}
+}
+
+func TestAuth_IPAllowlist_XForwardedFor_Spoofing(t *testing.T) {
+	cfg := testConfig()
+	cfg.Admin.Auth = config.AdminAuthConfig{
+		Enabled: true,
+		APIKeys: []config.AdminAPIKey{
+			{Key: "key", Role: "admin"},
+		},
+		IPAllowlist: []string{"192.168.1.100"},
+		// No trusted proxies — XFF should be ignored
+	}
+
+	srv := New(
+		func() *config.Config { return cfg },
+		func() *cache.Cache { return nil },
+		func() *cache.Invalidator { return nil },
+		func() map[string]*proxy.DatabaseGroup { return nil },
+		"testdb",
+		func() *audit.Logger { return nil },
+		nil, nil, nil, nil,
+	)
+
+	handler := srv.HTTPServer().Handler
+
+	// Attacker sets X-Forwarded-For to bypass IP allowlist — should be denied
+	req := httptest.NewRequest(http.MethodGet, "/admin/stats", nil)
+	req.RemoteAddr = "1.2.3.4:9999"
+	req.Header.Set("Authorization", "Bearer key")
+	req.Header.Set("X-Forwarded-For", "192.168.1.100")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("XFF spoofing without trusted proxy: status = %d, want 403", w.Code)
+	}
+}
+
+func TestAuth_IPAllowlist_XForwardedFor_UntrustedProxy(t *testing.T) {
+	cfg := testConfig()
+	cfg.Admin.Auth = config.AdminAuthConfig{
+		Enabled: true,
+		APIKeys: []config.AdminAPIKey{
+			{Key: "key", Role: "admin"},
+		},
+		IPAllowlist:    []string{"192.168.1.100"},
+		TrustedProxies: []string{"10.0.0.1"},
+	}
+
+	srv := New(
+		func() *config.Config { return cfg },
+		func() *cache.Cache { return nil },
+		func() *cache.Invalidator { return nil },
+		func() map[string]*proxy.DatabaseGroup { return nil },
+		"testdb",
+		func() *audit.Logger { return nil },
+		nil, nil, nil, nil,
+	)
+
+	handler := srv.HTTPServer().Handler
+
+	// XFF sent from untrusted proxy — XFF should be ignored, use RemoteAddr
+	req := httptest.NewRequest(http.MethodGet, "/admin/stats", nil)
+	req.RemoteAddr = "172.16.0.1:9999"
+	req.Header.Set("Authorization", "Bearer key")
+	req.Header.Set("X-Forwarded-For", "192.168.1.100")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("XFF from untrusted proxy: status = %d, want 403", w.Code)
 	}
 }
 
@@ -1057,14 +1131,19 @@ func TestAuth_ErrorResponseFormat(t *testing.T) {
 
 func TestExtractClientIP(t *testing.T) {
 	tests := []struct {
-		name       string
-		remoteAddr string
-		xff        string
-		want       string
+		name           string
+		remoteAddr     string
+		xff            string
+		trustedProxies []string
+		want           string
 	}{
-		{"remote addr with port", "192.168.1.1:12345", "", "192.168.1.1"},
-		{"xff single", "10.0.0.1:1234", "192.168.1.100", "192.168.1.100"},
-		{"xff chain", "10.0.0.1:1234", "192.168.1.100, 10.0.0.2, 10.0.0.3", "192.168.1.100"},
+		{"remote addr with port", "192.168.1.1:12345", "", nil, "192.168.1.1"},
+		{"xff ignored without trusted proxies", "10.0.0.1:1234", "192.168.1.100", nil, "10.0.0.1"},
+		{"xff ignored with empty trusted proxies", "10.0.0.1:1234", "192.168.1.100", []string{}, "10.0.0.1"},
+		{"xff trusted proxy single", "10.0.0.1:1234", "192.168.1.100", []string{"10.0.0.1"}, "192.168.1.100"},
+		{"xff trusted proxy chain", "10.0.0.1:1234", "192.168.1.100, 10.0.0.2", []string{"10.0.0.1"}, "192.168.1.100"},
+		{"xff trusted proxy cidr", "10.0.0.1:1234", "192.168.1.100", []string{"10.0.0.0/8"}, "192.168.1.100"},
+		{"xff untrusted proxy", "172.16.0.1:1234", "192.168.1.100", []string{"10.0.0.1"}, "172.16.0.1"},
 	}
 
 	for _, tt := range tests {
@@ -1074,7 +1153,7 @@ func TestExtractClientIP(t *testing.T) {
 			if tt.xff != "" {
 				r.Header.Set("X-Forwarded-For", tt.xff)
 			}
-			got := extractClientIP(r)
+			got := extractClientIP(r, tt.trustedProxies)
 			if got != tt.want {
 				t.Errorf("extractClientIP() = %q, want %q", got, tt.want)
 			}
