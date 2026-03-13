@@ -277,6 +277,7 @@ tests/
   integration_test.go             # 통합 테스트
   benchmark_test.go               # 벤치마크
 Dockerfile                        # Multi-stage 빌드
+deploy/grafana/                   # Grafana 대시보드 JSON 템플릿
 deploy/helm/pgmux/             # Kubernetes Helm Chart
 ```
 
@@ -339,6 +340,40 @@ curl -X POST http://localhost:8080/v1/query \
 
 R/W 라우팅, 캐싱, 방화벽, Rate Limiting이 투명하게 적용됩니다.
 
+## Grafana Dashboard
+
+`deploy/grafana/pgmux-overview.json`에 Prometheus 데이터소스 기반 Grafana 대시보드 템플릿을 제공합니다.
+
+### 대시보드 구성
+
+| 섹션 | 패널 | 주요 메트릭 |
+|------|------|------------|
+| **Overview** | Total QPS, Avg Latency, Cache Hit Rate, Open Connections | 운영 핵심 지표 한눈에 |
+| **Query Routing** | QPS by Target, Duration P50/P99, Reader Fallback | Writer/Reader 부하 분산 확인 |
+| **Connection Pool** | Open/Idle Connections, Acquire Duration, Acquires/sec | 풀 포화도 모니터링 |
+| **Cache** | Hits/Misses, Hit Rate Gauge, Entries & Invalidations | 캐시 효율 추적 |
+| **Security** | Firewall Blocked, Rate Limited | 차단/제한 현황 |
+| **Replication** | LSN Lag (bytes) per Reader | Replica 지연 감시 |
+| **Audit** | Slow Queries, Webhook Sent/Errors | 느린 쿼리 추세 |
+| **Query Digest** | Unique Patterns | 쿼리 다양성 추이 |
+
+### 설치 방법
+
+**Grafana UI에서 Import:**
+
+1. Grafana → Dashboards → Import
+2. `deploy/grafana/pgmux-overview.json` 파일 업로드
+3. Prometheus 데이터소스 선택 → Import
+
+**Helm Chart (Grafana Sidecar):**
+
+```bash
+helm install pgmux deploy/helm/pgmux/ \
+  --set grafanaDashboard.enabled=true
+```
+
+`grafana_dashboard: "1"` 라벨이 적용된 ConfigMap이 생성되어 Grafana sidecar가 자동으로 대시보드를 로드합니다.
+
 ## Kubernetes 배포 (Helm)
 
 ### Docker 이미지 빌드
@@ -365,6 +400,7 @@ helm install pgmux deploy/helm/pgmux/ \
 | `autoscaling.enabled` | false | HPA 활성화 |
 | `podDisruptionBudget.enabled` | true | PDB 활성화 |
 | `serviceMonitor.enabled` | false | Prometheus Operator ServiceMonitor |
+| `grafanaDashboard.enabled` | false | Grafana sidecar용 대시보드 ConfigMap |
 
 ## 라이선스
 
