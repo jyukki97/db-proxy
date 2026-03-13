@@ -286,6 +286,9 @@ func (s *Server) executeRead(ctx context.Context, sql string, pq *router.ParsedQ
 	resp, err := s.executeOnPool(ctx, sql, rPool)
 	if err != nil {
 		// Fallback to writer
+		if balancer != nil {
+			balancer.MarkUnhealthy(readerAddr)
+		}
 		if s.met != nil {
 			s.met.ReaderFallback.Inc()
 		}
