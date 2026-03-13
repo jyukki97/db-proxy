@@ -193,7 +193,9 @@ func (p *Pool) Release(conn *Conn) {
 
 	if p.closed {
 		conn.Close()
-		p.numOpen--
+		if p.numOpen > 0 {
+			p.numOpen--
+		}
 		return
 	}
 
@@ -216,11 +218,12 @@ func (p *Pool) Close() {
 	}
 	p.closed = true
 	close(p.done) // stop health check goroutine
+	idleCount := len(p.idle)
 	for _, conn := range p.idle {
 		conn.Close()
 	}
 	p.idle = nil
-	p.numOpen = 0
+	p.numOpen -= idleCount // only subtract idle conns, preserve outstanding borrow count
 }
 
 // Stats returns current pool statistics.
@@ -235,7 +238,9 @@ func (p *Pool) Stats() (numOpen, numIdle int) {
 func (p *Pool) Discard(conn *Conn) {
 	conn.Close()
 	p.mu.Lock()
-	p.numOpen--
+	if p.numOpen > 0 {
+		p.numOpen--
+	}
 	p.mu.Unlock()
 
 	select {
