@@ -598,3 +598,21 @@
 | - | 캐시 키에 DB명 XOR 혼합 (FNV-1a), LSN 폴링 DB 그룹별 순회 | #171 |
 | - | Admin API: DB별 health/stats, Data API: ?database= 파라미터 | #171 |
 | - | 기존 single-DB config 완전 하위호환 | #171 |
+
+### Phase 24: Query Digest / Top-N Queries
+
+| Task | 작업 | 이슈/PR |
+|------|------|---------|
+| - | 쿼리 정규화 ($N 치환) 및 패턴별 실행 횟수, 평균/P50/P99 레이턴시 집계 | #173 / #174 |
+| - | Admin API: GET /admin/queries/top, POST /admin/queries/reset | #173 / #174 |
+| - | Prometheus 메트릭: pgmux_digest_patterns (고유 패턴 수) | #173 / #174 |
+| - | DigestConfig 설정 (max_patterns, samples_per_pattern) | #173 / #174 |
+
+### Phase 25: Grafana Dashboard 템플릿
+
+| Task | 작업 | 이슈/PR |
+|------|------|---------|
+| - | deploy/grafana/pgmux-overview.json 대시보드 템플릿 (17개 메트릭 전체 커버, 8개 섹션) | #175 |
+| - | Helm ConfigMap 템플릿 (Grafana sidecar 자동 배포) | #175 |
+| - | values.yaml: grafanaDashboard.enabled 옵션 추가 | #175 |
+| - | README Grafana Dashboard 섹션 추가 | #175 |

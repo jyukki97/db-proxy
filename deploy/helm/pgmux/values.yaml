@@ -91,6 +91,11 @@ serviceMonitor:
   interval: 15s
   labels: {}
 
+grafanaDashboard:
+  enabled: false
+  labels: {}
+  annotations: {}
+
 nodeSelector: {}
 tolerations: []
 affinity: {}
