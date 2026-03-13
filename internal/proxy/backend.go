@@ -41,23 +41,6 @@ func (s *Server) acquireWriterConn(ctx context.Context, bound *pool.Conn, dbg *D
 	return conn, true, nil
 }
 
-// resetAndReleaseWriter sends a reset query (DISCARD ALL) and returns the connection to the pool.
-// If the reset fails, the connection is discarded instead.
-func (s *Server) resetAndReleaseWriter(conn *pool.Conn, dbg *DatabaseGroup) {
-	if err := s.resetConn(conn); err != nil {
-		slog.Warn("reset writer conn failed, discarding", "error", err)
-		dbg.writerPool.Discard(conn)
-		return
-	}
-	dbg.writerPool.Release(conn)
-}
-
-// releaseWriterFast returns the connection to the pool without sending DISCARD ALL.
-// Safe for read-only queries that did not modify session state (SET, PREPARE, etc.).
-func (s *Server) releaseWriterFast(conn *pool.Conn, dbg *DatabaseGroup) {
-	dbg.writerPool.Release(conn)
-}
-
 // resetAndReleaseToPool sends DISCARD ALL and returns the connection to the specified pool.
 // Use this instead of resetAndReleaseWriter when the connection may outlive a config reload
 // (e.g., boundWriter in a transaction), to ensure Release goes to the pool that issued Acquire.
@@ -109,8 +92,10 @@ func (s *Server) resetConn(conn net.Conn) error {
 
 // fallbackToWriter acquires a writer connection from the pool and forwards a read query.
 // Since this is a read-only fallback, we skip DISCARD ALL on release.
+// The pool reference is captured before Acquire to prevent cross-pool release on hot-reload.
 func (s *Server) fallbackToWriter(ctx context.Context, clientConn net.Conn, msg *protocol.Message, ct *cancelTarget, dbg *DatabaseGroup) error {
-	wConn, err := dbg.writerPool.Acquire(ctx)
+	wPool := dbg.writerPool // capture before acquire — reload may replace dbg.writerPool
+	wConn, err := wPool.Acquire(ctx)
 	if err != nil {
 		s.sendError(clientConn, "no available backend connections")
 		return fmt.Errorf("acquire writer for fallback: %w", err)
@@ -122,9 +107,9 @@ func (s *Server) fallbackToWriter(ctx context.Context, clientConn net.Conn, msg 
 	err = s.forwardAndRelay(clientConn, wConn, msg)
 	ct.clear()
 	if err != nil {
-		dbg.writerPool.Discard(wConn)
+		wPool.Discard(wConn)
 	} else {
-		s.releaseWriterFast(wConn, dbg)
+		wPool.Release(wConn)
 	}
 	return err
 }

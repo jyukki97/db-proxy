@@ -46,12 +46,14 @@ func (s *Server) handleExtendedRead(ctx context.Context, clientConn net.Conn, bu
 	if len(queryTimeout) > 0 {
 		extTimeout = queryTimeout[0]
 	}
-	// Fallback helper: send entire batch to writer via pool
+	// Fallback helper: send entire batch to writer via pool.
+	// Capture pool reference before Acquire to prevent cross-pool release on hot-reload.
 	fallbackToWriter := func() error {
 		if s.metrics != nil {
 			s.metrics.ReaderFallback.Inc()
 		}
-		wConn, err := dbg.writerPool.Acquire(ctx)
+		wPool := dbg.writerPool // capture before acquire
+		wConn, err := wPool.Acquire(ctx)
 		if err != nil {
 			s.sendError(clientConn, "no available backend connections")
 			return fmt.Errorf("acquire writer for ext fallback: %w", err)
@@ -59,16 +61,16 @@ func (s *Server) handleExtendedRead(ctx context.Context, clientConn net.Conn, bu
 		ct.setFromConn(dbg.writerAddr, wConn)
 		if err := s.forwardExtBatch(wConn, buf, syncMsg); err != nil {
 			ct.clear()
-			dbg.writerPool.Discard(wConn)
+			wPool.Discard(wConn)
 			return fmt.Errorf("forward ext to writer: %w", err)
 		}
 		if err := s.relayUntilReady(clientConn, wConn); err != nil {
 			ct.clear()
-			dbg.writerPool.Discard(wConn)
+			wPool.Discard(wConn)
 			return err
 		}
 		ct.clear()
-		s.resetAndReleaseWriter(wConn, dbg)
+		s.resetAndReleaseToPool(wConn, wPool)
 		return nil
 	}
 
@@ -250,11 +252,13 @@ func (s *Server) executeSynthesizedQuery(ctx context.Context, clientConn net.Con
 
 // handleSynthesizedRead sends a synthesized Simple Query to a reader.
 func (s *Server) handleSynthesizedRead(ctx context.Context, clientConn net.Conn, queryPayload []byte, readerAddr string, ct *cancelTarget, dbg *DatabaseGroup) error {
+	// Capture pool reference before Acquire to prevent cross-pool release on hot-reload.
 	fallbackToWriter := func() error {
 		if s.metrics != nil {
 			s.metrics.ReaderFallback.Inc()
 		}
-		wConn, err := dbg.writerPool.Acquire(ctx)
+		wPool := dbg.writerPool // capture before acquire
+		wConn, err := wPool.Acquire(ctx)
 		if err != nil {
 			s.sendError(clientConn, "no available backend connections")
 			return fmt.Errorf("acquire writer for synthesized fallback: %w", err)
@@ -262,16 +266,16 @@ func (s *Server) handleSynthesizedRead(ctx context.Context, clientConn net.Conn,
 		ct.setFromConn(dbg.writerAddr, wConn)
 		if err := protocol.WriteMessage(wConn, protocol.MsgQuery, queryPayload); err != nil {
 			ct.clear()
-			dbg.writerPool.Discard(wConn)
+			wPool.Discard(wConn)
 			return fmt.Errorf("send synthesized to writer: %w", err)
 		}
 		if err := s.relayUntilReady(clientConn, wConn); err != nil {
 			ct.clear()
-			dbg.writerPool.Discard(wConn)
+			wPool.Discard(wConn)
 			return err
 		}
 		ct.clear()
-		s.resetAndReleaseWriter(wConn, dbg)
+		s.resetAndReleaseToPool(wConn, wPool)
 		return nil
 	}
 
@@ -354,8 +358,10 @@ func (s *Server) handleMultiplexDescribe(ctx context.Context, clientConn net.Con
 		return nil
 	}
 
-	// Forward to backend: Parse → Describe → Close → Sync, then relay response
-	wConn, err := dbg.writerPool.Acquire(ctx)
+	// Forward to backend: Parse → Describe → Close → Sync, then relay response.
+	// Capture pool reference before Acquire to prevent cross-pool release on hot-reload.
+	wPool := dbg.writerPool // capture before acquire
+	wConn, err := wPool.Acquire(ctx)
 	if err != nil {
 		s.sendError(clientConn, "cannot acquire backend connection for describe")
 		return nil
@@ -384,19 +390,19 @@ func (s *Server) handleMultiplexDescribe(ctx context.Context, clientConn net.Con
 
 	// Send Parse → Describe → Close → Sync
 	if err := protocol.WriteMessage(wConn, protocol.MsgParse, parseBuf); err != nil {
-		dbg.writerPool.Discard(wConn)
+		wPool.Discard(wConn)
 		return fmt.Errorf("send describe parse: %w", err)
 	}
 	if err := protocol.WriteMessage(wConn, protocol.MsgDescribe, descBuf); err != nil {
-		dbg.writerPool.Discard(wConn)
+		wPool.Discard(wConn)
 		return fmt.Errorf("send describe: %w", err)
 	}
 	if err := protocol.WriteMessage(wConn, protocol.MsgClose, closeBuf); err != nil {
-		dbg.writerPool.Discard(wConn)
+		wPool.Discard(wConn)
 		return fmt.Errorf("send describe close: %w", err)
 	}
 	if err := protocol.WriteMessage(wConn, protocol.MsgSync, nil); err != nil {
-		dbg.writerPool.Discard(wConn)
+		wPool.Discard(wConn)
 		return fmt.Errorf("send describe sync: %w", err)
 	}
 
@@ -404,7 +410,7 @@ func (s *Server) handleMultiplexDescribe(ctx context.Context, clientConn net.Con
 	for {
 		resp, err := protocol.ReadMessage(wConn)
 		if err != nil {
-			dbg.writerPool.Discard(wConn)
+			wPool.Discard(wConn)
 			return fmt.Errorf("read describe response: %w", err)
 		}
 
@@ -415,12 +421,12 @@ func (s *Server) handleMultiplexDescribe(ctx context.Context, clientConn net.Con
 			continue
 		case protocol.MsgReadyForQuery:
 			// Don't forward ReadyForQuery — caller handles that
-			s.resetAndReleaseWriter(wConn, dbg)
+			s.resetAndReleaseToPool(wConn, wPool)
 			return nil
 		default:
 			// Forward ParameterDescription, RowDescription, ErrorResponse, etc.
 			if err := protocol.WriteMessage(clientConn, resp.Type, resp.Payload); err != nil {
-				dbg.writerPool.Discard(wConn)
+				wPool.Discard(wConn)
 				return fmt.Errorf("forward describe response: %w", err)
 			}
 		}
