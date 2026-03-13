@@ -20,7 +20,7 @@ A lightweight PostgreSQL proxy written in Go. Sitting between your application a
 - **Hint-Based Routing** -- Force routing via SQL comments: `/* route:writer */ SELECT ...`
 - **Transaction Awareness** -- All queries within `BEGIN` ~ `COMMIT`/`ROLLBACK` are sent to the Writer.
 - **Prometheus Metrics** -- Exposes pool, routing, and cache metrics at the `/metrics` endpoint.
-- **Admin API** -- Provides runtime statistics, health checks, and cache flush operations via HTTP.
+- **Admin API** -- Provides runtime statistics, health checks, and cache flush operations via HTTP. Supports Bearer API Key authentication with RBAC (admin/viewer role separation) and optional IP allowlist. Settings are hot-reloadable.
 - **Serverless Data API** -- Execute SQL via HTTP with `POST /v1/query` and receive JSON responses. Reuse pooled connections from Lambda/Edge functions without TCP connection overhead. API Key authentication, firewall, and caching are applied transparently.
 - **Audit Logging & Slow Query Tracker** -- Records structured audit logs for all queries or only slow queries. Sends alerts via Webhook (e.g., Slack) when thresholds are exceeded, with automatic deduplication of alerts for the same query.
 - **Query Mirroring** -- Asynchronously mirrors production queries to a Shadow DB for latency comparison. Supports per-pattern P50/P99 latency comparison, automatic performance regression detection, table filtering, and read_only/all modes. Validate the performance impact of DB migrations and index changes without affecting production traffic.
@@ -230,6 +230,16 @@ metrics:
 admin:
   enabled: true
   listen: "0.0.0.0:9091"
+  auth:
+    enabled: true
+    api_keys:
+      - key: "your-admin-api-key"
+        role: "admin"              # Full access (GET + POST)
+      - key: "your-viewer-api-key"
+        role: "viewer"             # Read-only access (GET only)
+    ip_allowlist:                  # Optional -- allowed IP/CIDRs (empty = allow all)
+      - "10.0.0.0/8"
+      - "172.16.0.0/12"
 
 data_api:
   enabled: false
@@ -316,18 +326,24 @@ deploy/helm/pgmux/             # Kubernetes Helm Chart
 
 ## Admin API
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/admin/stats` | GET | Pool, cache, and routing statistics |
-| `/admin/health` | GET | Backend health status (per Writer + Reader) |
-| `/admin/config` | GET | Currently applied configuration (passwords masked) |
-| `/admin/cache/flush` | POST | Flush entire cache |
-| `/admin/cache/flush/{table}` | POST | Invalidate cache for a specific table |
-| `/admin/reload` | POST | Hot reload configuration |
-| `/admin/mirror/stats` | GET | Query mirroring statistics (per-pattern P50/P99, regression detection) |
-| `/admin/queries/top` | GET | Query Digest Top-N (per-pattern execution count, avg/P50/P99 latency) |
-| `/admin/queries/reset` | POST | Reset Query Digest statistics |
-| `/admin/connections` | GET | Per-user/per-database active connections and limits |
+When `admin.auth.enabled: true`, all endpoints require a Bearer API Key:
+
+```bash
+curl -H "Authorization: Bearer your-admin-api-key" http://localhost:9091/admin/stats
+```
+
+| Endpoint | Method | Required Role | Description |
+|----------|--------|--------------|-------------|
+| `/admin/stats` | GET | viewer | Pool, cache, and routing statistics |
+| `/admin/health` | GET | viewer | Backend health status (per Writer + Reader) |
+| `/admin/config` | GET | viewer | Currently applied configuration (passwords/API keys masked) |
+| `/admin/cache/flush` | POST | admin | Flush entire cache |
+| `/admin/cache/flush/{table}` | POST | admin | Invalidate cache for a specific table |
+| `/admin/reload` | POST | admin | Hot reload configuration |
+| `/admin/mirror/stats` | GET | viewer | Query mirroring statistics (per-pattern P50/P99, regression detection) |
+| `/admin/queries/top` | GET | viewer | Query Digest Top-N (per-pattern execution count, avg/P50/P99 latency) |
+| `/admin/queries/reset` | POST | admin | Reset Query Digest statistics |
+| `/admin/connections` | GET | viewer | Per-user/per-database active connections and limits |
 
 ## Metrics
 

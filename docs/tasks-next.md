@@ -56,7 +56,7 @@
 ### 추천 실행 로드맵
 
 ```
-Phase 29: Idle Client Timeout (완료) + Admin API Auth
+Phase 29: Idle Client Timeout (완료) + Admin API Auth (완료)
 Phase 30: Healthz/Readyz + Maintenance + Read-Only Mode
 Phase 31: Session Compatibility Guard + SQL Redaction
 Phase 32: Active Session Dashboard
