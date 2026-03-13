@@ -1,91 +1,41 @@
 # pgmux
 
-PostgreSQL 프록시 — 커넥션 풀링, R/W 쿼리 자동 분산, 반복 쿼리 캐싱.
+PostgreSQL 프록시 — Go, PostgreSQL wire protocol 직접 구현.
 
 ## 참고 문서
 
-작업 전 반드시 아래 문서를 읽고 맥락을 파악할 것.
+필요 시 해당 문서를 읽을 것.
 
-| 문서 | 경로 | 내용 |
-|------|------|------|
-| 스펙 | `docs/spec.md` | 기능 요구사항, 설정 항목, YAML 설정 예시 |
-| 구현 설계 | `docs/implementation.md` | 기술 스택, 프로젝트 구조, 자료구조/알고리즘, 요청 처리 흐름 |
-| 워크플로우 | `docs/workflow.md` | 작업 개요, 세부 문서 인덱스 |
-| 전체 Task | `docs/tasks-completed.md` | 완료된 Phase/Task 목록 및 이슈/PR 번호 |
-| 향후 Task | `docs/tasks-next.md` | Phase 20+ 고도화 추천 기능 및 로드맵 |
-| Agent Teams | `docs/agent-teams.md` | Claude Code Agent Teams 활용 가이드 |
-| Git 워크플로우 | `docs/git-workflow.md` | 브랜치 전략, 커밋, PR 규칙 |
-| 블로그 계획 | `docs/blog-plan.md` | 포스팅 시점, 주제, 템플릿 |
-
-## 기술 스택
-
-- 언어: Go
-- DB: PostgreSQL (wire protocol 직접 구현)
-- 설정: YAML (`gopkg.in/yaml.v3`)
-- 캐시: 인메모리 LRU (`container/list`)
-- 로깅: `slog` (표준 라이브러리)
-- 해시: FNV-1a (`hash/fnv`)
-- 인증: MD5, SCRAM-SHA-256 (`golang.org/x/crypto/pbkdf2`)
-- SQL 파싱: `pg_query_go/v5` (PostgreSQL C 파서 cgo 바인딩)
-- 메트릭: Prometheus (`prometheus/client_golang`)
-- 분산 추적: OpenTelemetry (`go.opentelemetry.io/otel`)
-- 캐시 무효화: Redis Pub/Sub (`github.com/redis/go-redis/v9`)
-- 파일 감시: fsnotify (`github.com/fsnotify/fsnotify`)
-- PG 드라이버 (테스트용): `lib/pq`
+- 기술 스택/프로젝트 구조/설계/설정: `docs/implementation.md`
+- 워크플로우/Task: `docs/workflow.md`
+- 향후 Task: `docs/tasks-next.md`
+- Git 규칙 상세: `docs/git-workflow.md`
+- 블로그 계획: `docs/blog-plan.md`
 
 ## 프로젝트 구조
 
 ```
-cmd/pgmux/main.go              # 진입점 (-debug 플래그)
+cmd/pgmux/main.go
 internal/
-  config/
-    config.go                  # 설정 파싱 (Backend, Metrics, Admin 포함)
-    watcher.go                 # 설정 파일 변경 감시 (fsnotify, ConfigMap symlink swap)
-  proxy/
-    server.go                  # Server 구조체, NewServer, Start, handleConn, Reload, getters
-    auth.go                    # 인증 핸드셰이크 (relayAuth, frontendAuth)
-    query.go                   # 메인 쿼리 루프 (relayQueries)
-    query_read.go              # 읽기 쿼리 처리 (handleReadQueryTraced)
-    query_extended.go          # 확장 쿼리 프로토콜 (Prepared Statement 라우팅)
-    copy.go                    # COPY IN/OUT/BOTH 릴레이
-    backend.go                 # 백엔드 커넥션 관리 (acquire, reset, fallback)
-    lsn.go                     # LSN 폴링 (Causal Consistency)
-    helpers.go                 # 유틸리티 (sendError, parseSize, emitAuditEvent 등)
-    pgconn.go                  # PG 인증 연결 (MD5, SCRAM-SHA-256)
-    synthesizer.go             # Prepared Statement Multiplexing
-    cancel.go                  # CancelRequest 프로토콜 처리
-  pool/pool.go                 # 커넥션 풀링 (DialFunc, Discard, 헬스체크)
-  router/
-    router.go                  # Writer/Reader 라우팅 결정 (Causal Consistency)
-    parser.go                  # 문자열 기반 쿼리 분류
-    parser_ast.go              # AST 기반 쿼리 분류 (pg_query_go)
-    ast.go                     # SQL AST 파싱 + 노드 순회
-    balancer.go                # 라운드로빈 로드밸런서 + LSN-aware 라우팅
-    lsn.go                     # PostgreSQL LSN 타입 파싱/비교
-    firewall.go                # 쿼리 방화벽 (위험 쿼리 차단)
-  cache/
-    cache.go                   # LRU 캐시 + 테이블별 무효화
-    invalidator.go             # Redis Pub/Sub 캐시 무효화 전파
-    normalize.go               # 시맨틱 캐시 키 (AST Parse+Deparse)
-  protocol/
-    message.go                 # PG 와이어 프로토콜 메시지 파싱
-    literal.go                 # PG 타입별 SQL 리터럴 직렬화 (Injection 방어)
-  resilience/
-    ratelimit.go               # Token Bucket Rate Limiter
-    breaker.go                 # Circuit Breaker (Closed/Open/Half-Open)
-  metrics/metrics.go           # Prometheus 메트릭
-  telemetry/telemetry.go       # OpenTelemetry 분산 추적
-  audit/audit.go               # Audit Logging + Slow Query Tracker
-  mirror/
-    mirror.go                  # Query Mirroring (Shadow DB 비동기 전송, 워커 풀)
-    stats.go                   # 패턴별 P50/P99 레이턴시 비교, 순환 버퍼, 회귀 감지
-  digest/digest.go             # Query Digest (Top-N 쿼리 패턴별 실행 통계)
-  dataapi/handler.go           # Serverless Data API (HTTP → PG)
-  admin/admin.go               # Admin HTTP API
-tests/
-  e2e_test.go                  # Docker E2E 테스트
-  integration_test.go          # 통합 테스트
-  benchmark_test.go            # 벤치마크
+  config/   config.go, watcher.go
+  proxy/    server.go, auth.go, query.go, query_read.go, query_extended.go,
+            copy.go, backend.go, lsn.go, helpers.go, pgconn.go,
+            synthesizer.go, cancel.go, connlimit.go, dbgroup.go
+  pool/     pool.go
+  router/   router.go, parser.go, parser_ast.go, ast.go, parsed_query.go,
+            balancer.go, lsn.go, firewall.go
+  cache/    cache.go, invalidator.go, normalize.go
+  protocol/ message.go, literal.go
+  resilience/ ratelimit.go, breaker.go
+  metrics/  metrics.go
+  telemetry/ telemetry.go
+  audit/    audit.go
+  mirror/   mirror.go, stats.go
+  digest/   digest.go
+  dataapi/  handler.go
+  admin/    admin.go
+tests/      e2e_test.go, integration_test.go, benchmark_test.go,
+            bench_concurrent_test.go, bench_resource_test.go
 ```
 
 ## README 동기화

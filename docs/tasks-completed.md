@@ -608,6 +608,14 @@
 | - | Prometheus 메트릭: pgmux_digest_patterns (고유 패턴 수) | #173 / #174 |
 | - | DigestConfig 설정 (max_patterns, samples_per_pattern) | #173 / #174 |
 
+### chore: OSS Release Prep
+
+| Task | 작업 | 이슈/PR |
+|------|------|---------|
+| - | CONTRIBUTING.md 작성 (기여 가이드) | #180 |
+| - | 영문 README (README_en.md) 작성 | #180 |
+| - | GitHub 이슈/PR 템플릿 추가 | #180 |
+
 ### Phase 25: Grafana Dashboard 템플릿
 
 | Task | 작업 | 이슈/PR |

@@ -40,7 +40,9 @@ pgmux/
 │   │   ├── helpers.go           # 유틸리티 (sendError, parseSize, emitAuditEvent)
 │   │   ├── pgconn.go            # PG 인증 연결 (MD5, SCRAM-SHA-256)
 │   │   ├── synthesizer.go       # Prepared Statement → Simple Query 합성 (Multiplexing)
-│   │   └── cancel.go            # CancelRequest 프로토콜 처리
+│   │   ├── cancel.go            # CancelRequest 프로토콜 처리
+│   │   ├── connlimit.go         # 커넥션 수 제한
+│   │   └── dbgroup.go           # DB 그룹 관리
 │   ├── pool/
 │   │   └── pool.go              # 커넥션 풀 핵심 로직 + 헬스체크
 │   ├── router/
@@ -48,6 +50,7 @@ pgmux/
 │   │   ├── parser.go            # 문자열 기반 쿼리 분류
 │   │   ├── parser_ast.go        # AST 기반 쿼리 분류 (pg_query_go)
 │   │   ├── ast.go               # SQL AST 파싱 + 깊이 우선 노드 순회
+│   │   ├── parsed_query.go      # 파싱된 쿼리 구조체 (캐시/라우팅 공유)
 │   │   ├── balancer.go          # Reader 라운드로빈 + LSN-aware 라우팅
 │   │   ├── lsn.go               # PostgreSQL LSN 타입 파싱/비교
 │   │   └── firewall.go          # 쿼리 방화벽 (위험 쿼리 차단)
@@ -72,19 +75,28 @@ pgmux/
 │   │   └── stats.go             # 패턴별 P50/P99 레이턴시 비교, 순환 버퍼, 회귀 감지
 │   ├── dataapi/
 │   │   └── handler.go           # Serverless Data API HTTP 서버
+│   ├── digest/
+│   │   └── digest.go            # Query Digest (Top-N 쿼리 패턴별 실행 통계)
 │   └── admin/
 │       └── admin.go             # Admin HTTP API
 ├── tests/
 │   ├── e2e_test.go              # Docker 기반 E2E 테스트
 │   ├── integration_test.go      # 통합 테스트
-│   └── benchmark_test.go        # 벤치마크
+│   ├── benchmark_test.go        # 벤치마크
+│   ├── bench_concurrent_test.go # 동시성 벤치마크
+│   └── bench_resource_test.go   # 리소스 벤치마크
 ├── deploy/
 │   └── helm/
 │       └── pgmux/               # Helm Chart (Chart.yaml, values.yaml, templates/)
 ├── Dockerfile                   # Multi-stage 빌드
 ├── docs/
-│   ├── spec.md
-│   └── implementation.md
+│   ├── implementation.md
+│   ├── workflow.md
+│   ├── tasks-completed.md
+│   ├── tasks-next.md
+│   ├── agent-teams.md
+│   ├── git-workflow.md
+│   └── blog-plan.md
 ├── config.yaml                  # 기본 설정 파일
 ├── go.mod
 └── go.sum
@@ -846,3 +858,134 @@ type patternStats struct {
 - `proxy/helpers.go`: `mirrorQuery()` 훅 — nil 체크 → 모드 필터 → 테이블 필터 → Send
 - `proxy/server.go`: `NewServer()`에서 Mirror 초기화, `Close()`에서 `mirror.Close()` 호출
 - `admin/admin.go`: `GET /admin/mirror/stats` 핸들러, `mirrorStatsFn` 콜백 주입
+
+---
+
+### 16. Query Digest
+
+`internal/digest/digest.go`에서 Top-N 쿼리 패턴별 실행 통계를 수집한다.
+
+- `pg_query.Normalize()`로 쿼리를 정규화하여 패턴별 그룹핑
+- 패턴별 실행 횟수, 총 실행 시간, 평균/최대 실행 시간 추적
+- `GET /admin/digest` — Top-N 쿼리 패턴 통계 조회
+
+---
+
+### Prometheus 메트릭 이름
+
+| 메트릭 | 타입 | 설명 |
+|--------|------|------|
+| `pgmux_pool_connections_open` | GaugeVec | 열린 커넥션 수 (role, addr) |
+| `pgmux_pool_connections_idle` | GaugeVec | 유휴 커넥션 수 |
+| `pgmux_pool_waiting_total` | GaugeVec | 커넥션 획득 대기 수 |
+| `pgmux_pool_acquire_duration_seconds` | HistogramVec | 커넥션 획득 레이턴시 |
+| `pgmux_queries_routed_total` | CounterVec | 쿼리 라우팅 카운터 (target) |
+| `pgmux_query_duration_seconds` | HistogramVec | 쿼리 처리 레이턴시 (target) |
+| `pgmux_reader_fallback_total` | Counter | Writer fallback 횟수 |
+| `pgmux_cache_hits_total` | Counter | 캐시 히트 |
+| `pgmux_cache_misses_total` | Counter | 캐시 미스 |
+| `pgmux_cache_entries` | Gauge | 캐시 항목 수 |
+| `pgmux_cache_invalidations_total` | Counter | 캐시 무효화 |
+| `pgmux_slow_queries_total` | CounterVec | Slow Query 카운터 (target) |
+| `pgmux_audit_webhook_sent_total` | Counter | Webhook 전송 횟수 |
+| `pgmux_audit_webhook_errors_total` | Counter | Webhook 실패 횟수 |
+| `pgmux_reader_lsn_lag_bytes` | GaugeVec | Reader LSN 지연 바이트 |
+
+---
+
+### 설정 전체 예시
+
+```yaml
+proxy:
+  listen: "0.0.0.0:5432"
+  shutdown_timeout: 30s
+
+writer:
+  host: "primary.db.internal"
+  port: 5432
+
+readers:
+  - host: "replica-1.db.internal"
+    port: 5432
+  - host: "replica-2.db.internal"
+    port: 5432
+
+pool:
+  min_connections: 5
+  max_connections: 50
+  idle_timeout: "10m"
+  max_lifetime: "1h"
+  connection_timeout: "5s"
+  reset_query: "DISCARD ALL"
+  prepared_statement_mode: "proxy"    # "proxy" | "multiplex"
+
+routing:
+  read_after_write_delay: "500ms"
+  causal_consistency: false
+  ast_parser: false
+
+firewall:
+  enabled: true
+  block_delete_without_where: true
+  block_update_without_where: true
+  block_drop_table: false
+  block_truncate: false
+
+cache:
+  enabled: true
+  cache_ttl: "10s"
+  max_cache_entries: 10000
+  max_result_size: "1MB"
+  invalidation:
+    mode: "pubsub"                    # "local" | "pubsub"
+    redis_addr: "localhost:6379"
+    channel: "pgmux:invalidate"
+
+audit:
+  enabled: true
+  slow_query_threshold: "500ms"
+  log_all_queries: false
+  webhook:
+    enabled: false
+    url: "https://hooks.slack.com/services/..."
+    timeout: "5s"
+
+mirror:
+  enabled: false
+  host: "shadow-db.internal"
+  port: 5432
+  mode: "read_only"                    # "read_only" | "all"
+  tables: []
+  compare: true
+  workers: 4
+  buffer_size: 10000
+
+backend:
+  user: "postgres"
+  password: "postgres"
+  database: "testdb"
+
+metrics:
+  enabled: true
+  listen: "0.0.0.0:9090"
+
+admin:
+  enabled: true
+  listen: "0.0.0.0:9091"
+
+data_api:
+  enabled: true
+  listen: "0.0.0.0:8080"
+  api_keys:
+    - "your-api-key-here"
+
+telemetry:
+  enabled: false
+  exporter: "otlp"                    # "otlp" | "stdout"
+  endpoint: "localhost:4317"
+  service_name: "pgmux"
+  sample_ratio: 1.0
+
+config:
+  watch: true
+```
