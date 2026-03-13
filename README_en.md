@@ -240,6 +240,9 @@ admin:
     ip_allowlist:                  # Optional -- allowed IP/CIDRs (empty = allow all)
       - "10.0.0.0/8"
       - "172.16.0.0/12"
+    trusted_proxies:               # Optional -- reverse proxy IPs/CIDRs that may set X-Forwarded-For (empty = never trust XFF)
+      - "10.0.0.1"
+      - "172.16.0.0/12"
 
 data_api:
   enabled: false

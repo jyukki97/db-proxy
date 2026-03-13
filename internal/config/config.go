@@ -92,9 +92,10 @@ type AdminConfig struct {
 }
 
 type AdminAuthConfig struct {
-	Enabled     bool          `yaml:"enabled"`
-	APIKeys     []AdminAPIKey `yaml:"api_keys"`
-	IPAllowlist []string      `yaml:"ip_allowlist"`
+	Enabled        bool          `yaml:"enabled"`
+	APIKeys        []AdminAPIKey `yaml:"api_keys"`
+	IPAllowlist    []string      `yaml:"ip_allowlist"`
+	TrustedProxies []string      `yaml:"trusted_proxies"`
 }
 
 type AdminAPIKey struct {
@@ -495,6 +496,14 @@ func (c *Config) validate() error {
 				// Try as single IP
 				if ip := net.ParseIP(cidr); ip == nil {
 					return fmt.Errorf("admin.auth.ip_allowlist[%d] %q is not a valid IP or CIDR", i, cidr)
+				}
+			}
+		}
+		for i, cidr := range c.Admin.Auth.TrustedProxies {
+			if _, _, err := net.ParseCIDR(cidr); err != nil {
+				// Try as single IP
+				if ip := net.ParseIP(cidr); ip == nil {
+					return fmt.Errorf("admin.auth.trusted_proxies[%d] %q is not a valid IP or CIDR", i, cidr)
 				}
 			}
 		}
