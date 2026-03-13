@@ -65,9 +65,9 @@ func (s *Server) relayQueries(ctx context.Context, clientConn net.Conn, session 
 		// Set idle timeout deadline on client read.
 		// Only apply when not in a transaction (boundWriter == nil).
 		if idleTimeout := s.getConfig().Proxy.ClientIdleTimeout; idleTimeout > 0 && boundWriter == nil {
-			clientConn.SetReadDeadline(time.Now().Add(idleTimeout))
+			_ = clientConn.SetReadDeadline(time.Now().Add(idleTimeout))
 		} else {
-			clientConn.SetReadDeadline(time.Time{}) // clear deadline
+			_ = clientConn.SetReadDeadline(time.Time{}) // clear deadline
 		}
 
 		var msg *protocol.Message
