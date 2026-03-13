@@ -86,6 +86,7 @@ func (s *Server) handleReadQueryTraced(traceCtx, poolCtx context.Context, client
 		if cb, ok := dbg.ReaderCB(readerAddr); ok {
 			cb.RecordFailure()
 		}
+		dbg.balancer.MarkUnhealthy(readerAddr)
 		return s.fallbackToWriter(poolCtx, clientConn, msg, ct, dbg)
 	}
 	if s.metrics != nil {
@@ -116,6 +117,7 @@ func (s *Server) handleReadQueryTraced(traceCtx, poolCtx context.Context, client
 		}
 		slog.Error("forward to reader", "addr", readerAddr, "error", err)
 		rPool.Discard(rConn)
+		dbg.balancer.MarkUnhealthy(readerAddr)
 		return s.fallbackToWriter(poolCtx, clientConn, msg, ct, dbg)
 	}
 
@@ -134,6 +136,7 @@ func (s *Server) handleReadQueryTraced(traceCtx, poolCtx context.Context, client
 			if cb, ok := dbg.ReaderCB(readerAddr); ok {
 				cb.RecordFailure()
 			}
+			dbg.balancer.MarkUnhealthy(readerAddr)
 			return fmt.Errorf("relay reader response: %w", err)
 		}
 		rPool.Release(rConn)
@@ -160,6 +163,7 @@ func (s *Server) handleReadQueryTraced(traceCtx, poolCtx context.Context, client
 			if cb, ok := dbg.ReaderCB(readerAddr); ok {
 				cb.RecordFailure()
 			}
+			dbg.balancer.MarkUnhealthy(readerAddr)
 			return fmt.Errorf("relay reader response: %w", err)
 		}
 		if stopTimer != nil {

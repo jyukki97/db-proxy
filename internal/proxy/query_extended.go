@@ -90,6 +90,7 @@ func (s *Server) handleExtendedRead(ctx context.Context, clientConn net.Conn, bu
 		acquireSpan.SetStatus(codes.Error, err.Error())
 		acquireSpan.End()
 		slog.Warn("acquire reader failed for extended query, fallback to writer", "addr", readerAddr, "error", err)
+		dbg.balancer.MarkUnhealthy(readerAddr)
 		return fallbackToWriter()
 	}
 	acquireSpan.End()
@@ -116,6 +117,7 @@ func (s *Server) handleExtendedRead(ctx context.Context, clientConn net.Conn, bu
 		execSpan.End()
 		slog.Error("forward ext to reader", "addr", readerAddr, "error", err)
 		rPool.Discard(rConn)
+		dbg.balancer.MarkUnhealthy(readerAddr)
 		return fallbackToWriter()
 	}
 
@@ -129,6 +131,7 @@ func (s *Server) handleExtendedRead(ctx context.Context, clientConn net.Conn, bu
 		rPool.Release(rConn)
 		execSpan.End()
 		if err != nil {
+			dbg.balancer.MarkUnhealthy(readerAddr)
 			return fmt.Errorf("relay reader extended response: %w", err)
 		}
 		// Cache the response keyed by the batch (first Parse query), skip if oversize
@@ -150,6 +153,7 @@ func (s *Server) handleExtendedRead(ctx context.Context, clientConn net.Conn, bu
 			execSpan.SetStatus(codes.Error, err.Error())
 			execSpan.End()
 			rPool.Discard(rConn)
+			dbg.balancer.MarkUnhealthy(readerAddr)
 			return fmt.Errorf("relay reader extended response: %w", err)
 		}
 		if stopTimer != nil {
@@ -273,6 +277,7 @@ func (s *Server) handleSynthesizedRead(ctx context.Context, clientConn net.Conn,
 
 	rConn, err := rPool.Acquire(ctx)
 	if err != nil {
+		dbg.balancer.MarkUnhealthy(readerAddr)
 		return fallbackToWriter()
 	}
 
@@ -280,12 +285,14 @@ func (s *Server) handleSynthesizedRead(ctx context.Context, clientConn net.Conn,
 	if err := protocol.WriteMessage(rConn, protocol.MsgQuery, queryPayload); err != nil {
 		ct.clear()
 		rPool.Discard(rConn)
+		dbg.balancer.MarkUnhealthy(readerAddr)
 		return fallbackToWriter()
 	}
 
 	if err := s.relayUntilReady(clientConn, rConn); err != nil {
 		ct.clear()
 		rPool.Discard(rConn)
+		dbg.balancer.MarkUnhealthy(readerAddr)
 		return fmt.Errorf("relay reader synthesized response: %w", err)
 	}
 	ct.clear()
