@@ -1,4 +1,4 @@
-## 완료된 Task (Phase 1-23)
+## 완료된 Task (Phase 1-28)
 
 모든 Task 완료됨.
 
@@ -658,3 +658,17 @@
 | - | pprof 3차: ReadMessage Raw 필드 (Payload = Raw[5:] subslice) | #182 / #183 |
 | - | pprof 3차: ForwardRaw zero-copy forwarding (WriteMessage 93% alloc 제거) | #182 / #183 |
 | - | **결과: SELECT-only 46%→93.2% of direct, TPC-B 73%→82.3%** | #182 / #183 |
+
+### Phase 28: Per-User / Per-Database Connection Limits
+
+| Task | 작업 | 이슈/PR |
+|------|------|---------|
+| - | ConnectionLimitsConfig 설정 구조 추가 | #184 / #185 |
+| - | AuthUser.MaxConnections, DatabaseConfig.MaxConnections 오버라이드 | #184 / #185 |
+| - | ConnTracker 구현 (TryAcquire/Release, sync.Mutex) | #184 / #185 |
+| - | handleConn 인증 전 커넥션 제한 적용 | #184 / #185 |
+| - | sendFatalWithCode (SQLSTATE 53300 too_many_connections) | #184 / #185 |
+| - | Prometheus 메트릭 (rejected, active_by_user, active_by_db) | #184 / #185 |
+| - | Admin API GET /admin/connections | #184 / #185 |
+| - | Hot-reload 지원 (UpdateLimits — 카운터 유지, 제한값만 갱신) | #184 / #185 |
+| - | 유닛 테스트 7건 (동시성 포함) | #184 / #185 |
