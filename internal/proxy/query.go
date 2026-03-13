@@ -70,7 +70,7 @@ func (s *Server) relayQueries(ctx context.Context, clientConn net.Conn, session 
 			}
 			s.sendError(clientConn, "too many requests")
 			// Send ReadyForQuery so the client can continue
-			protocol.WriteMessage(clientConn, protocol.MsgReadyForQuery, []byte{'I'})
+			_ = protocol.WriteMessage(clientConn, protocol.MsgReadyForQuery, []byte{'I'})
 			continue
 		}
 
