@@ -16,8 +16,8 @@ import (
 	"github.com/jyukki97/pgmux/internal/proxy"
 )
 
-func testServer() (*Server, *cache.Cache) {
-	cfg := &config.Config{
+func testConfig() *config.Config {
+	return &config.Config{
 		Proxy:  config.ProxyConfig{Listen: "0.0.0.0:5432"},
 		Writer: config.DBConfig{Host: "127.0.0.1", Port: 5432},
 		Readers: []config.DBConfig{
@@ -41,6 +41,10 @@ func testServer() (*Server, *cache.Cache) {
 			Database: "testdb",
 		},
 	}
+}
+
+func testServer() (*Server, *cache.Cache) {
+	cfg := testConfig()
 
 	c := cache.New(cache.Config{
 		MaxEntries: 1000,
@@ -142,6 +146,58 @@ func TestHandleConfig_MasksPassword(t *testing.T) {
 	}
 	if backend["user"] != "postgres" {
 		t.Errorf("user = %q, want postgres", backend["user"])
+	}
+}
+
+func TestHandleConfig_MasksAdminAPIKeys(t *testing.T) {
+	cfg := testConfig()
+	cfg.Admin.Auth = config.AdminAuthConfig{
+		Enabled: true,
+		APIKeys: []config.AdminAPIKey{
+			{Key: "super-secret-key", Role: "admin"},
+		},
+		IPAllowlist: []string{"10.0.0.0/8"},
+	}
+
+	srv := New(
+		func() *config.Config { return cfg },
+		func() *cache.Cache { return nil },
+		func() *cache.Invalidator { return nil },
+		func() map[string]*proxy.DatabaseGroup { return nil },
+		"testdb",
+		func() *audit.Logger { return nil },
+		nil, nil, nil, nil,
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/config", nil)
+	w := httptest.NewRecorder()
+	srv.handleConfig(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var resp map[string]any
+	json.NewDecoder(w.Body).Decode(&resp)
+
+	adminSection := resp["admin"].(map[string]any)
+	authSection := adminSection["auth"].(map[string]any)
+	keys := authSection["api_keys"].([]any)
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 api key, got %d", len(keys))
+	}
+	key := keys[0].(map[string]any)
+	if key["key"] != "********" {
+		t.Errorf("api key not masked: %q", key["key"])
+	}
+	if key["role"] != "admin" {
+		t.Errorf("role = %q, want admin", key["role"])
+	}
+
+	// Verify raw key is not leaked
+	body := w.Body.String()
+	if strings.Contains(body, "super-secret-key") {
+		t.Error("raw API key leaked in config response")
 	}
 }
 
@@ -421,6 +477,455 @@ func TestHandleHealth_LiveBackends(t *testing.T) {
 		if rd["healthy"] != true {
 			t.Errorf("reader[%d] should be healthy", i)
 		}
+	}
+}
+
+// --- Admin Auth Tests ---
+
+func TestAuth_Disabled_NoToken(t *testing.T) {
+	srv, _ := testServer()
+	ts := httptest.NewServer(srv.HTTPServer().Handler)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/admin/stats")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200 (auth disabled)", resp.StatusCode)
+	}
+}
+
+func TestAuth_Enabled_NoToken(t *testing.T) {
+	cfg := testConfig()
+	cfg.Admin.Auth = config.AdminAuthConfig{
+		Enabled: true,
+		APIKeys: []config.AdminAPIKey{
+			{Key: "admin-key", Role: "admin"},
+		},
+	}
+
+	srv := New(
+		func() *config.Config { return cfg },
+		func() *cache.Cache { return nil },
+		func() *cache.Invalidator { return nil },
+		func() map[string]*proxy.DatabaseGroup { return nil },
+		"testdb",
+		func() *audit.Logger { return nil },
+		nil, nil, nil, nil,
+	)
+
+	ts := httptest.NewServer(srv.HTTPServer().Handler)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/admin/stats")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", resp.StatusCode)
+	}
+	if resp.Header.Get("WWW-Authenticate") != "Bearer" {
+		t.Error("expected WWW-Authenticate: Bearer header")
+	}
+}
+
+func TestAuth_Enabled_InvalidToken(t *testing.T) {
+	cfg := testConfig()
+	cfg.Admin.Auth = config.AdminAuthConfig{
+		Enabled: true,
+		APIKeys: []config.AdminAPIKey{
+			{Key: "admin-key", Role: "admin"},
+		},
+	}
+
+	srv := New(
+		func() *config.Config { return cfg },
+		func() *cache.Cache { return nil },
+		func() *cache.Invalidator { return nil },
+		func() map[string]*proxy.DatabaseGroup { return nil },
+		"testdb",
+		func() *audit.Logger { return nil },
+		nil, nil, nil, nil,
+	)
+
+	ts := httptest.NewServer(srv.HTTPServer().Handler)
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/admin/stats", nil)
+	req.Header.Set("Authorization", "Bearer wrong-key")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", resp.StatusCode)
+	}
+}
+
+func TestAuth_AdminRole_AllEndpoints(t *testing.T) {
+	cfg := testConfig()
+	cfg.Admin.Auth = config.AdminAuthConfig{
+		Enabled: true,
+		APIKeys: []config.AdminAPIKey{
+			{Key: "admin-key", Role: "admin"},
+		},
+	}
+
+	c := cache.New(cache.Config{MaxEntries: 100, TTL: 10 * time.Second})
+	srv := New(
+		func() *config.Config { return cfg },
+		func() *cache.Cache { return c },
+		func() *cache.Invalidator { return nil },
+		func() map[string]*proxy.DatabaseGroup { return nil },
+		"testdb",
+		func() *audit.Logger { return nil },
+		nil, nil, nil, nil,
+	)
+	srv.SetReloadFunc(func() error { return nil })
+
+	ts := httptest.NewServer(srv.HTTPServer().Handler)
+	defer ts.Close()
+
+	tests := []struct {
+		method string
+		path   string
+		want   int
+	}{
+		{http.MethodGet, "/admin/stats", 200},
+		{http.MethodGet, "/admin/health", 200},
+		{http.MethodGet, "/admin/config", 200},
+		{http.MethodPost, "/admin/cache/flush", 200},
+		{http.MethodPost, "/admin/reload", 200},
+	}
+
+	for _, tt := range tests {
+		req, _ := http.NewRequest(tt.method, ts.URL+tt.path, nil)
+		req.Header.Set("Authorization", "Bearer admin-key")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", tt.method, tt.path, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != tt.want {
+			t.Errorf("%s %s: status = %d, want %d", tt.method, tt.path, resp.StatusCode, tt.want)
+		}
+	}
+}
+
+func TestAuth_ViewerRole_ReadOnly(t *testing.T) {
+	cfg := testConfig()
+	cfg.Admin.Auth = config.AdminAuthConfig{
+		Enabled: true,
+		APIKeys: []config.AdminAPIKey{
+			{Key: "viewer-key", Role: "viewer"},
+		},
+	}
+
+	c := cache.New(cache.Config{MaxEntries: 100, TTL: 10 * time.Second})
+	srv := New(
+		func() *config.Config { return cfg },
+		func() *cache.Cache { return c },
+		func() *cache.Invalidator { return nil },
+		func() map[string]*proxy.DatabaseGroup { return nil },
+		"testdb",
+		func() *audit.Logger { return nil },
+		nil, nil, nil, nil,
+	)
+	srv.SetReloadFunc(func() error { return nil })
+
+	ts := httptest.NewServer(srv.HTTPServer().Handler)
+	defer ts.Close()
+
+	// GET endpoints should work
+	getEndpoints := []string{"/admin/stats", "/admin/health", "/admin/config", "/admin/connections"}
+	for _, path := range getEndpoints {
+		req, _ := http.NewRequest(http.MethodGet, ts.URL+path, nil)
+		req.Header.Set("Authorization", "Bearer viewer-key")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("GET %s: status = %d, want 200", path, resp.StatusCode)
+		}
+	}
+
+	// POST endpoints should be forbidden
+	postEndpoints := []string{"/admin/cache/flush", "/admin/reload", "/admin/queries/reset"}
+	for _, path := range postEndpoints {
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+path, nil)
+		req.Header.Set("Authorization", "Bearer viewer-key")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("POST %s: %v", path, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("POST %s: status = %d, want 403", path, resp.StatusCode)
+		}
+	}
+}
+
+func TestAuth_IPAllowlist_Allowed(t *testing.T) {
+	cfg := testConfig()
+	cfg.Admin.Auth = config.AdminAuthConfig{
+		Enabled: true,
+		APIKeys: []config.AdminAPIKey{
+			{Key: "key", Role: "admin"},
+		},
+		IPAllowlist: []string{"127.0.0.0/8"},
+	}
+
+	srv := New(
+		func() *config.Config { return cfg },
+		func() *cache.Cache { return nil },
+		func() *cache.Invalidator { return nil },
+		func() map[string]*proxy.DatabaseGroup { return nil },
+		"testdb",
+		func() *audit.Logger { return nil },
+		nil, nil, nil, nil,
+	)
+
+	ts := httptest.NewServer(srv.HTTPServer().Handler)
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/admin/stats", nil)
+	req.Header.Set("Authorization", "Bearer key")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200 (localhost allowed)", resp.StatusCode)
+	}
+}
+
+func TestAuth_IPAllowlist_Denied(t *testing.T) {
+	cfg := testConfig()
+	cfg.Admin.Auth = config.AdminAuthConfig{
+		Enabled: true,
+		APIKeys: []config.AdminAPIKey{
+			{Key: "key", Role: "admin"},
+		},
+		IPAllowlist: []string{"10.0.0.0/8"},
+	}
+
+	srv := New(
+		func() *config.Config { return cfg },
+		func() *cache.Cache { return nil },
+		func() *cache.Invalidator { return nil },
+		func() map[string]*proxy.DatabaseGroup { return nil },
+		"testdb",
+		func() *audit.Logger { return nil },
+		nil, nil, nil, nil,
+	)
+
+	ts := httptest.NewServer(srv.HTTPServer().Handler)
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/admin/stats", nil)
+	req.Header.Set("Authorization", "Bearer key")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 (IP not in allowlist)", resp.StatusCode)
+	}
+}
+
+func TestAuth_IPAllowlist_XForwardedFor(t *testing.T) {
+	cfg := testConfig()
+	cfg.Admin.Auth = config.AdminAuthConfig{
+		Enabled: true,
+		APIKeys: []config.AdminAPIKey{
+			{Key: "key", Role: "admin"},
+		},
+		IPAllowlist: []string{"192.168.1.100"},
+	}
+
+	srv := New(
+		func() *config.Config { return cfg },
+		func() *cache.Cache { return nil },
+		func() *cache.Invalidator { return nil },
+		func() map[string]*proxy.DatabaseGroup { return nil },
+		"testdb",
+		func() *audit.Logger { return nil },
+		nil, nil, nil, nil,
+	)
+
+	// Use httptest.NewRecorder to control RemoteAddr
+	handler := srv.HTTPServer().Handler
+
+	// X-Forwarded-For with allowed IP
+	req := httptest.NewRequest(http.MethodGet, "/admin/stats", nil)
+	req.Header.Set("Authorization", "Bearer key")
+	req.Header.Set("X-Forwarded-For", "192.168.1.100, 10.0.0.1")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("XFF allowed: status = %d, want 200", w.Code)
+	}
+
+	// X-Forwarded-For with denied IP
+	req2 := httptest.NewRequest(http.MethodGet, "/admin/stats", nil)
+	req2.Header.Set("Authorization", "Bearer key")
+	req2.Header.Set("X-Forwarded-For", "10.0.0.1")
+	w2 := httptest.NewRecorder()
+	handler.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusForbidden {
+		t.Errorf("XFF denied: status = %d, want 403", w2.Code)
+	}
+}
+
+func TestAuth_HotReload(t *testing.T) {
+	cfg := testConfig()
+	// Start with auth disabled
+	srv := New(
+		func() *config.Config { return cfg },
+		func() *cache.Cache { return nil },
+		func() *cache.Invalidator { return nil },
+		func() map[string]*proxy.DatabaseGroup { return nil },
+		"testdb",
+		func() *audit.Logger { return nil },
+		nil, nil, nil, nil,
+	)
+
+	ts := httptest.NewServer(srv.HTTPServer().Handler)
+	defer ts.Close()
+
+	// Auth disabled → should work without token
+	resp, _ := http.Get(ts.URL + "/admin/stats")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("auth disabled: status = %d, want 200", resp.StatusCode)
+	}
+
+	// Enable auth via config mutation (simulating hot-reload)
+	cfg.Admin.Auth = config.AdminAuthConfig{
+		Enabled: true,
+		APIKeys: []config.AdminAPIKey{
+			{Key: "new-key", Role: "admin"},
+		},
+	}
+
+	// Without token → should now be 401
+	resp2, _ := http.Get(ts.URL + "/admin/stats")
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusUnauthorized {
+		t.Errorf("auth enabled: status = %d, want 401", resp2.StatusCode)
+	}
+
+	// With new token → should work
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/admin/stats", nil)
+	req.Header.Set("Authorization", "Bearer new-key")
+	resp3, _ := http.DefaultClient.Do(req)
+	resp3.Body.Close()
+	if resp3.StatusCode != http.StatusOK {
+		t.Errorf("auth with token: status = %d, want 200", resp3.StatusCode)
+	}
+}
+
+func TestAuth_ErrorResponseFormat(t *testing.T) {
+	cfg := testConfig()
+	cfg.Admin.Auth = config.AdminAuthConfig{
+		Enabled: true,
+		APIKeys: []config.AdminAPIKey{
+			{Key: "key", Role: "admin"},
+		},
+	}
+
+	srv := New(
+		func() *config.Config { return cfg },
+		func() *cache.Cache { return nil },
+		func() *cache.Invalidator { return nil },
+		func() map[string]*proxy.DatabaseGroup { return nil },
+		"testdb",
+		func() *audit.Logger { return nil },
+		nil, nil, nil, nil,
+	)
+
+	ts := httptest.NewServer(srv.HTTPServer().Handler)
+	defer ts.Close()
+
+	resp, _ := http.Get(ts.URL + "/admin/stats")
+	defer resp.Body.Close()
+
+	ct := resp.Header.Get("Content-Type")
+	if !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+
+	var body map[string]string
+	json.NewDecoder(resp.Body).Decode(&body)
+	if body["error"] != "authentication required" {
+		t.Errorf("error = %q, want \"authentication required\"", body["error"])
+	}
+}
+
+func TestExtractClientIP(t *testing.T) {
+	tests := []struct {
+		name       string
+		remoteAddr string
+		xff        string
+		want       string
+	}{
+		{"remote addr with port", "192.168.1.1:12345", "", "192.168.1.1"},
+		{"xff single", "10.0.0.1:1234", "192.168.1.100", "192.168.1.100"},
+		{"xff chain", "10.0.0.1:1234", "192.168.1.100, 10.0.0.2, 10.0.0.3", "192.168.1.100"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/", nil)
+			r.RemoteAddr = tt.remoteAddr
+			if tt.xff != "" {
+				r.Header.Set("X-Forwarded-For", tt.xff)
+			}
+			got := extractClientIP(r)
+			if got != tt.want {
+				t.Errorf("extractClientIP() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsIPAllowed(t *testing.T) {
+	tests := []struct {
+		clientIP  string
+		allowlist []string
+		want      bool
+	}{
+		{"192.168.1.1", []string{"192.168.1.0/24"}, true},
+		{"192.168.2.1", []string{"192.168.1.0/24"}, false},
+		{"10.0.0.5", []string{"10.0.0.5"}, true},
+		{"10.0.0.6", []string{"10.0.0.5"}, false},
+		{"10.0.0.1", []string{"192.168.0.0/16", "10.0.0.0/8"}, true},
+		{"invalid", []string{"10.0.0.0/8"}, false},
+	}
+
+	for _, tt := range tests {
+		name := fmt.Sprintf("%s_in_%v", tt.clientIP, tt.allowlist)
+		t.Run(name, func(t *testing.T) {
+			got := isIPAllowed(tt.clientIP, tt.allowlist)
+			if got != tt.want {
+				t.Errorf("isIPAllowed(%q, %v) = %v, want %v", tt.clientIP, tt.allowlist, got, tt.want)
+			}
+		})
 	}
 }
 

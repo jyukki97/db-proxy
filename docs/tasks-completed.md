@@ -672,3 +672,16 @@
 | - | Admin API GET /admin/connections | #184 / #185 |
 | - | Hot-reload 지원 (UpdateLimits — 카운터 유지, 제한값만 갱신) | #184 / #185 |
 | - | 유닛 테스트 7건 (동시성 포함) | #184 / #185 |
+
+### Phase 29: Admin API Auth / RBAC
+
+| Task | 작업 | 이슈/PR |
+|------|------|---------|
+| - | AdminAuthConfig, AdminAPIKey 설정 구조 추가 | #190 |
+| - | Bearer API Key 인증 미들웨어 (withAuth) | #190 |
+| - | RBAC: admin/viewer 역할 분리 (POST=admin, GET=viewer) | #190 |
+| - | IP Allowlist 지원 (CIDR + 단일 IP, X-Forwarded-For) | #190 |
+| - | Hot-reload 지원 (cfgFn getter 패턴으로 즉시 반영) | #190 |
+| - | handleConfig API Key 마스킹 | #190 |
+| - | 설정 검증 (API Key 필수, role 유효성, CIDR 파싱) | #190 |
+| - | 유닛 테스트 13건 (인증, 역할, IP allowlist, hot-reload, 응답 형식) | #190 |

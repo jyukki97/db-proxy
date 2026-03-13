@@ -60,16 +60,116 @@ func New(cfgFn func() *config.Config, cacheFn func() *cache.Cache, invalidatorFn
 // The caller is responsible for calling Serve/Shutdown.
 func (s *Server) HTTPServer() *http.Server {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/admin/health", s.handleHealth)
-	mux.HandleFunc("/admin/stats", s.handleStats)
-	mux.HandleFunc("/admin/config", s.handleConfig)
-	mux.HandleFunc("/admin/cache/flush", s.handleCacheFlush)
-	mux.HandleFunc("/admin/reload", s.handleReload)
-	mux.HandleFunc("/admin/mirror/stats", s.handleMirrorStats)
-	mux.HandleFunc("/admin/queries/top", s.handleQueryDigest)
-	mux.HandleFunc("/admin/queries/reset", s.handleQueryDigestReset)
-	mux.HandleFunc("/admin/connections", s.handleConnections)
+	mux.HandleFunc("/admin/health", s.withAuth(s.handleHealth, false))
+	mux.HandleFunc("/admin/stats", s.withAuth(s.handleStats, false))
+	mux.HandleFunc("/admin/config", s.withAuth(s.handleConfig, false))
+	mux.HandleFunc("/admin/cache/flush", s.withAuth(s.handleCacheFlush, true))
+	mux.HandleFunc("/admin/reload", s.withAuth(s.handleReload, true))
+	mux.HandleFunc("/admin/mirror/stats", s.withAuth(s.handleMirrorStats, false))
+	mux.HandleFunc("/admin/queries/top", s.withAuth(s.handleQueryDigest, false))
+	mux.HandleFunc("/admin/queries/reset", s.withAuth(s.handleQueryDigestReset, true))
+	mux.HandleFunc("/admin/connections", s.withAuth(s.handleConnections, false))
 	return &http.Server{Handler: mux}
+}
+
+// withAuth wraps a handler with authentication and authorization checks.
+// If requireAdmin is true, only "admin" role keys are allowed.
+func (s *Server) withAuth(next http.HandlerFunc, requireAdmin bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cfg := s.cfgFn()
+		authCfg := cfg.Admin.Auth
+
+		if !authCfg.Enabled {
+			next(w, r)
+			return
+		}
+
+		// IP allowlist check
+		if len(authCfg.IPAllowlist) > 0 {
+			clientIP := extractClientIP(r)
+			if !isIPAllowed(clientIP, authCfg.IPAllowlist) {
+				writeJSONError(w, http.StatusForbidden, "ip not allowed")
+				return
+			}
+		}
+
+		// Bearer token check
+		token := extractBearerToken(r)
+		if token == "" {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			writeJSONError(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
+
+		role := ""
+		for _, k := range authCfg.APIKeys {
+			if k.Key == token {
+				role = k.Role
+				break
+			}
+		}
+		if role == "" {
+			writeJSONError(w, http.StatusUnauthorized, "invalid api key")
+			return
+		}
+
+		// Authorization: admin role required for mutating endpoints
+		if requireAdmin && role != "admin" {
+			writeJSONError(w, http.StatusForbidden, "admin role required")
+			return
+		}
+
+		next(w, r)
+	}
+}
+
+func extractBearerToken(r *http.Request) string {
+	auth := r.Header.Get("Authorization")
+	if strings.HasPrefix(auth, "Bearer ") {
+		return strings.TrimPrefix(auth, "Bearer ")
+	}
+	return ""
+}
+
+func extractClientIP(r *http.Request) string {
+	// Check X-Forwarded-For first (first IP is the original client)
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		parts := strings.SplitN(xff, ",", 2)
+		return strings.TrimSpace(parts[0])
+	}
+	// Fall back to RemoteAddr (host:port)
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+func isIPAllowed(clientIP string, allowlist []string) bool {
+	ip := net.ParseIP(clientIP)
+	if ip == nil {
+		return false
+	}
+	for _, entry := range allowlist {
+		_, cidr, err := net.ParseCIDR(entry)
+		if err == nil {
+			if cidr.Contains(ip) {
+				return true
+			}
+			continue
+		}
+		// Single IP match
+		if net.ParseIP(entry) != nil && entry == clientIP {
+			return true
+		}
+	}
+	return false
+}
+
+func writeJSONError(w http.ResponseWriter, code int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
 
 // ListenAndServe starts the admin HTTP server.
@@ -224,6 +324,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
+	type safeAdminAPIKey struct {
+		Key  string `json:"key"`
+		Role string `json:"role"`
+	}
 	type safeDBConfig struct {
 		Writer  config.DBConfig `json:"writer"`
 		Readers []config.DBConfig `json:"readers"`
@@ -246,6 +350,15 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			Enabled bool           `json:"enabled"`
 			Users   []safeAuthUser `json:"users,omitempty"`
 		} `json:"auth"`
+		Admin struct {
+			Enabled bool `json:"enabled"`
+			Listen  string `json:"listen"`
+			Auth    struct {
+				Enabled     bool              `json:"enabled"`
+				APIKeys     []safeAdminAPIKey `json:"api_keys,omitempty"`
+				IPAllowlist []string          `json:"ip_allowlist,omitempty"`
+			} `json:"auth"`
+		} `json:"admin"`
 		Backend struct {
 			User     string `json:"user"`
 			Password string `json:"password"`
@@ -266,6 +379,16 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		safe.Auth.Users = append(safe.Auth.Users, safeAuthUser{
 			Username: u.Username,
 			Password: "********",
+		})
+	}
+	safe.Admin.Enabled = cfg.Admin.Enabled
+	safe.Admin.Listen = cfg.Admin.Listen
+	safe.Admin.Auth.Enabled = cfg.Admin.Auth.Enabled
+	safe.Admin.Auth.IPAllowlist = cfg.Admin.Auth.IPAllowlist
+	for _, k := range cfg.Admin.Auth.APIKeys {
+		safe.Admin.Auth.APIKeys = append(safe.Admin.Auth.APIKeys, safeAdminAPIKey{
+			Key:  "********",
+			Role: k.Role,
 		})
 	}
 	safe.Backend.User = cfg.Backend.User

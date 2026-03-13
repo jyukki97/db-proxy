@@ -559,6 +559,26 @@ func (h *Handler) Register(mux *http.ServeMux) {
 }
 ```
 
+#### 인증 및 RBAC
+
+Admin API는 선택적으로 Bearer API Key 인증과 역할 기반 접근 제어를 지원한다.
+
+- **admin** 역할: 모든 엔드포인트 접근 가능 (GET + POST)
+- **viewer** 역할: GET 엔드포인트만 접근 가능 (POST → 403 Forbidden)
+- **IP Allowlist**: 설정 시 허용 IP/CIDR 외 요청 차단 (X-Forwarded-For 지원)
+- 인증 설정은 `cfgFn()` getter를 통해 hot-reload 시 즉시 반영
+
+```yaml
+admin:
+  auth:
+    enabled: true
+    api_keys:
+      - key: "secret"
+        role: "admin"
+    ip_allowlist:
+      - "10.0.0.0/8"
+```
+
 #### Stats 응답 예시
 
 ```json

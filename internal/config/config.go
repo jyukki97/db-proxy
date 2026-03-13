@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"time"
 
@@ -85,8 +86,20 @@ type MetricsConfig struct {
 }
 
 type AdminConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	Listen  string `yaml:"listen"`
+	Enabled bool            `yaml:"enabled"`
+	Listen  string          `yaml:"listen"`
+	Auth    AdminAuthConfig `yaml:"auth"`
+}
+
+type AdminAuthConfig struct {
+	Enabled     bool          `yaml:"enabled"`
+	APIKeys     []AdminAPIKey `yaml:"api_keys"`
+	IPAllowlist []string      `yaml:"ip_allowlist"`
+}
+
+type AdminAPIKey struct {
+	Key  string `yaml:"key"`
+	Role string `yaml:"role"` // "admin" or "viewer"
 }
 
 type TLSConfig struct {
@@ -464,6 +477,27 @@ func (c *Config) validate() error {
 	}
 	if c.Auth.Enabled && len(c.Auth.Users) == 0 {
 		return fmt.Errorf("auth.users is required when auth is enabled")
+	}
+	if c.Admin.Auth.Enabled {
+		if len(c.Admin.Auth.APIKeys) == 0 {
+			return fmt.Errorf("admin.auth.api_keys is required when admin.auth is enabled")
+		}
+		for i, k := range c.Admin.Auth.APIKeys {
+			if k.Key == "" {
+				return fmt.Errorf("admin.auth.api_keys[%d].key must not be empty", i)
+			}
+			if k.Role != "admin" && k.Role != "viewer" {
+				return fmt.Errorf("admin.auth.api_keys[%d].role must be \"admin\" or \"viewer\", got %q", i, k.Role)
+			}
+		}
+		for i, cidr := range c.Admin.Auth.IPAllowlist {
+			if _, _, err := net.ParseCIDR(cidr); err != nil {
+				// Try as single IP
+				if ip := net.ParseIP(cidr); ip == nil {
+					return fmt.Errorf("admin.auth.ip_allowlist[%d] %q is not a valid IP or CIDR", i, cidr)
+				}
+			}
+		}
 	}
 	if c.Pool.MinConnections < 0 {
 		return fmt.Errorf("pool.min_connections must be >= 0, got %d", c.Pool.MinConnections)
